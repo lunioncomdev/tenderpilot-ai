@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BoampConnector, buildBoampWhere, normalizeBoampRecord, type BoampRecord } from "@/server/connectors/boamp";
+import { BoampConnector, boampNoticePdfUrl, buildBoampWhere, normalizeBoampRecord, type BoampRecord } from "@/server/connectors/boamp";
 import { computeDedupKey } from "@/server/connectors/dedup";
 import { ThrottledHttp } from "@/server/connectors/http";
 import { parseEformsDateTime } from "@/server/connectors/parse";
@@ -44,6 +44,22 @@ describe("BOAMP", () => {
     const corr = normalizeBoampRecord({ ...base, nature: "RECTIFICATIF", annonce_lie: ["26-2"] });
     expect(corr.kind).toBe("CORRECTION");
     expect(corr.relatedExternalIds).toEqual(["26-2"]);
+  });
+
+  it("retrouve le lien du dossier de consultation dans les trois formats BOAMP", () => {
+    const base = boamp.results[0];
+    const eforms = normalizeBoampRecord(boamp.results.find((r) => r.idweb === "26-103266")!);
+    expect(eforms.documentsUrl).toBe("https://marches.maximilien.fr/entreprise/consultation/949384?orgAcronyme=p2q");
+    const fn = normalizeBoampRecord({ ...base, donnees: JSON.stringify({ FNSimple: { initial: { communication: { urlDocConsul: "https://www.marches-publics.info/dce?Idm=1" } } } }) });
+    expect(fn.documentsUrl).toBe("https://www.marches-publics.info/dce?Idm=1");
+    const mapa = normalizeBoampRecord({ ...base, donnees: JSON.stringify({ MAPA: { organisme: { urlProfilAcheteur: "https://webmarche.solaere.recia.fr/x" } } }) });
+    expect(mapa.documentsUrl).toBe("https://webmarche.solaere.recia.fr/x");
+  });
+
+  it("construit l'URL de l'extrait PDF de l'avis à partir du mois de parution", () => {
+    expect(boampNoticePdfUrl("26-103266", new Date("2026-10-25T00:00:00Z"))).toBe("https://www.boamp.fr/telechargements/FILES/PDF/2026/10/26-103266.pdf");
+    expect(boampNoticePdfUrl("26-67989", new Date("2026-07-09T00:00:00Z"))).toBe("https://www.boamp.fr/telechargements/FILES/PDF/2026/07/26-67989.pdf");
+    expect(() => boampNoticePdfUrl("../x", new Date())).toThrow();
   });
 
   it("échappe les mots-clés dans la requête ODSQL", () => {

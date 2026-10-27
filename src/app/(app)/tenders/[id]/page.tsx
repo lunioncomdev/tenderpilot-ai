@@ -9,6 +9,7 @@ import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle
 import { fr } from "@/i18n/fr";
 import { formatDate, formatDateTime, formatEur, NOT_SPECIFIED } from "@/lib/utils";
 import { aiStatus } from "@/server/ai/gateway";
+import { boampNoticePdfUrl } from "@/server/connectors/boamp";
 import type { TenderAnalysisResult } from "@/server/analysis/schema";
 import { requireContext } from "@/server/auth/context";
 import { hasRole } from "@/server/auth/rbac";
@@ -17,7 +18,7 @@ import { env } from "@/server/env";
 import { LEVEL_LABELS, scoreLevel, type CriterionResult, type EliminatoryCheck } from "@/server/scoring/engine";
 import { AnalysisView } from "./analysis-view";
 import {
-  addCommentAction, createProposalAction, deleteDocumentAction, recomputeScoreAction, reprocessDocumentAction,
+  addCommentAction, createProposalAction, deleteDocumentAction, importNoticePdfAction, recomputeScoreAction, reprocessDocumentAction,
   requestAnalysisAction, setDocumentKindAction, updateWorkflowAction,
 } from "./actions";
 
@@ -74,7 +75,10 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
         <p className="text-muted-foreground">{tender.buyerName || "Acheteur non précisé"}</p>
         <div className="flex flex-wrap gap-2">
           {tender.noticeUrl && <a className={buttonVariants({ variant: "outline", size: "sm" })} href={tender.noticeUrl} target="_blank" rel="noreferrer"><ExternalLink /> Avis officiel</a>}
-          {tender.documentsUrl && <a className={buttonVariants({ variant: "outline", size: "sm" })} href={tender.documentsUrl} target="_blank" rel="noreferrer"><ExternalLink /> Plateforme de l&apos;acheteur (DCE)</a>}
+          {tender.documentsUrl && <a className={buttonVariants({ variant: "outline", size: "sm" })} href={tender.documentsUrl} target="_blank" rel="noreferrer"><ExternalLink /> Dossier de consultation (DCE)</a>}
+          {tender.origin === "BOAMP" && tender.publishedAt && (
+            <a className={buttonVariants({ variant: "outline", size: "sm" })} href={boampNoticePdfUrl(tender.externalId, tender.publishedAt)} target="_blank" rel="noreferrer"><FileText /> Extrait de l&apos;avis (PDF)</a>
+          )}
         </div>
         {tender.duplicateOf && (
           <Alert>Publication en doublon de <Link className="text-primary underline" href={`/tenders/${tender.duplicateOf.id}`}>{tender.duplicateOf.title}</Link> ({tender.duplicateOf.origin}).</Alert>
@@ -110,10 +114,17 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
             <CardHeader>
               <CardTitle>Dossier de consultation (DCE)</CardTitle>
               <CardDescription>
-                Téléchargez le DCE sur la plateforme de l&apos;acheteur (authentification souvent requise), puis importez-le ici. Aucun contournement d&apos;accès n&apos;est effectué.
+                Le dossier de consultation se télécharge sur la plateforme de l&apos;acheteur (bouton « Dossier de consultation »), qui exige généralement un compte : importez-le ensuite ici. Aucun contournement d&apos;accès n&apos;est effectué.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
+              {canEdit && tender.origin === "BOAMP" && !tender.documents.some((d) => d.kind === "AVIS") && (
+                <ActionForm action={importNoticePdfAction} className="flex flex-wrap items-center gap-2">
+                  <input type="hidden" name="tenderId" value={tender.id} />
+                  <SubmitButton size="sm" variant="secondary" pendingText="Import…"><Download /> Importer l&apos;extrait de l&apos;avis BOAMP (PDF)</SubmitButton>
+                  <span className="text-xs text-muted-foreground">Récupéré automatiquement depuis boamp.fr et ajouté aux pièces analysables.</span>
+                </ActionForm>
+              )}
               {canEdit && <UploadDocuments tenderId={tender.id} maxMb={env().UPLOAD_MAX_MB} />}
               {tender.documents.length > 0 && (
                 <ul className="divide-y rounded-lg border">

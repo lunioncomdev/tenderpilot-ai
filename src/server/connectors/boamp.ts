@@ -124,8 +124,12 @@ export function normalizeBoampRecord(r: BoampRecord): NormalizedNotice {
   const durationNode = findFirst(findFirst(donnees, "cac:PlannedPeriod"), "cbc:DurationMeasure");
   const durationMonths = durationToMonths(toNumber(durationNode), attr(durationNode, "unitCode"));
 
+  // Lien vers le dossier de consultation : eForms, puis formats BOAMP « FNSimple » et « MAPA ».
   const docRef = findFirst(donnees, "cac:CallForTendersDocumentReference");
-  const documentsUrl = text(findFirst(docRef, "cbc:URI"));
+  const documentsUrl =
+    text(findFirst(docRef, "cbc:URI")) ??
+    text(findFirst(donnees, "urlDocConsul")) ??
+    text(findFirst(donnees, "urlProfilAcheteur"));
 
   return {
     source: "BOAMP",
@@ -211,4 +215,15 @@ export class BoampConnector implements TenderConnector {
 
 function addDays(d: Date, n: number): Date {
   return new Date(d.getTime() + n * 86_400_000);
+}
+
+/**
+ * Lien public « Obtenir un extrait de l'avis (PDF) » de la page d'avis boamp.fr :
+ * /telechargements/FILES/PDF/{année}/{mois de parution}/{idweb}.pdf
+ */
+export function boampNoticePdfUrl(idweb: string, publishedAt: Date): string {
+  if (!/^\d{2}-\d+$/.test(idweb)) throw new Error(`Identifiant BOAMP invalide : ${idweb}`);
+  const y = publishedAt.getUTCFullYear();
+  const m = String(publishedAt.getUTCMonth() + 1).padStart(2, "0");
+  return `https://www.boamp.fr/telechargements/FILES/PDF/${y}/${m}/${idweb}.pdf`;
 }

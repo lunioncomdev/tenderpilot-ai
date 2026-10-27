@@ -7,7 +7,8 @@ d'offres informatiques (première organisation : Lunioncom).
   inter-sources, prise en compte des rectificatifs, annulations et attributions.
 - Recherche plein texte (PostgreSQL, français) et filtres, recherches sauvegardées.
 - Import manuel des DCE (PDF, DOCX, XLSX, TXT, ZIP) avec extraction, découpage et
-  traçabilité des pages.
+  traçabilité des pages ; pour le BOAMP, import automatique de l'extrait PDF de
+  l'avis et lien direct vers le dossier de consultation de la plateforme acheteur.
 - Analyse IA du DCE avec **Claude** : chaque information est reliée à un passage
   et la citation est vérifiée côté serveur ; « Non précisé » si absente.
 - **Scoring déterministe explicable** + critères éliminatoires séparés → GO / NO-GO

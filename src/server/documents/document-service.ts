@@ -69,6 +69,36 @@ export async function registerDocument(input: {
   return { document, duplicate: false };
 }
 
+/** Domaines dont l'application peut télécharger elle-même des documents publics. */
+const REMOTE_ALLOWED_HOSTS = new Set(["www.boamp.fr", "boamp.fr"]);
+
+/**
+ * Télécharge un document public (liste blanche de domaines : pas de SSRF) et
+ * l'enregistre comme pièce de l'appel d'offres.
+ */
+export async function importRemoteDocument(input: {
+  orgId: string;
+  tenderId: string;
+  url: string;
+  filename: string;
+  userId?: string | null;
+  fetchImpl?: typeof fetch;
+}): Promise<{ document: TenderDocument; duplicate: boolean }> {
+  const url = new URL(input.url);
+  if (url.protocol !== "https:" || !REMOTE_ALLOWED_HOSTS.has(url.hostname)) {
+    throw new UploadRejectedError(`Téléchargement non autorisé depuis ${url.hostname}`);
+  }
+  const res = await (input.fetchImpl ?? fetch)(url, {
+    headers: { "User-Agent": "TenderPilotAI/0.1 (veille marchés publics)", Accept: "application/pdf" },
+    redirect: "error",
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) throw new UploadRejectedError(`Document indisponible (HTTP ${res.status})`);
+  const data = Buffer.from(await res.arrayBuffer());
+  if (data.length === 0) throw new UploadRejectedError("Le document renvoyé par la source est vide");
+  return registerDocument({ orgId: input.orgId, tenderId: input.tenderId, filename: input.filename, data, userId: input.userId });
+}
+
 /** Traitement complet d'un document (exécuté par le worker). */
 export async function processDocument(orgId: string, documentId: string): Promise<void> {
   const doc = await prisma.tenderDocument.findFirst({ where: { id: documentId, organizationId: orgId } });

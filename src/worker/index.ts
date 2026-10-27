@@ -5,6 +5,7 @@ import { logger } from "@/server/logger";
 import { redis } from "@/server/redis";
 import { runAnalysis } from "@/server/analysis/analysis-service";
 import { ALL_SOURCES } from "@/server/connectors/registry";
+import { importBoampNoticePdf } from "@/server/documents/boamp-notice";
 import { processDocument } from "@/server/documents/document-service";
 import { generateSection } from "@/server/proposals/proposal-service";
 import { enqueue, getQueue, type JobMap, type QueueName } from "@/server/queue/queues";
@@ -27,6 +28,10 @@ async function handle(job: Job) {
     case "process-document": {
       const d = job.data as JobMap["process-document"];
       return processDocument(d.orgId, d.documentId);
+    }
+    case "import-notice-pdf": {
+      const d = job.data as JobMap["import-notice-pdf"];
+      return importBoampNoticePdf(d.orgId, d.tenderId, d.userId);
     }
     case "analyze-tender": {
       const d = job.data as JobMap["analyze-tender"];

@@ -9,7 +9,8 @@ import { normalizeBoampRecord, type BoampRecord } from "@/server/connectors/boam
 import { normalizeTedNotice } from "@/server/connectors/ted";
 import type { NormalizedNotice, TenderConnector } from "@/server/connectors/types";
 import { runSync } from "@/server/sync/sync-service";
-import { registerDocument, processDocument, UploadRejectedError } from "@/server/documents/document-service";
+import { registerDocument, processDocument, UploadRejectedError, importRemoteDocument } from "@/server/documents/document-service";
+import { importBoampNoticePdf } from "@/server/documents/boamp-notice";
 import { setProviderForTests, AiNotAllowedError } from "@/server/ai/gateway";
 import { requestAnalysis, runAnalysis } from "@/server/analysis/analysis-service";
 import type { TenderAnalysisResult } from "@/server/analysis/schema";
@@ -183,6 +184,26 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
     const exe = Buffer.concat([Buffer.from("MZ"), Buffer.alloc(200, 1)]);
     await expect(registerDocument({ orgId, tenderId, filename: "facture.pdf", data: exe })).rejects.toBeInstanceOf(UploadRejectedError);
     await expect(registerDocument({ orgId: otherOrgId, tenderId, filename: "a.txt", data: Buffer.from("bonjour") })).rejects.toThrow("introuvable");
+  });
+
+  it("importe l'extrait PDF de l'avis BOAMP et refuse les domaines non autorisés", async () => {
+    const pdf = makePdf(["AVIS DE MARCHE (document fictif de test)\nObjet : maintenance du logiciel de signalements"]);
+    const urls: string[] = [];
+    const fakeFetch = (async (u: URL) => {
+      urls.push(String(u));
+      return new Response(new Uint8Array(pdf), { status: 200, headers: { "content-type": "application/pdf" } });
+    }) as unknown as typeof fetch;
+    const { document, url } = await importBoampNoticePdf(orgId, tenderId, userId, fakeFetch);
+    expect(url).toBe("https://www.boamp.fr/telechargements/FILES/PDF/2026/10/26-103266.pdf");
+    const doc = await prisma.tenderDocument.findUniqueOrThrow({ where: { id: document.id } });
+    expect(doc).toMatchObject({ kind: "AVIS", status: "EXTRACTED", filename: "Avis-BOAMP-26-103266.pdf" });
+
+    const empty = (async () => new Response(new Uint8Array(0), { status: 200 })) as unknown as typeof fetch;
+    await expect(importRemoteDocument({ orgId, tenderId, url: "https://www.boamp.fr/x.pdf", filename: "x.pdf", fetchImpl: empty })).rejects.toThrow("vide");
+    await expect(importRemoteDocument({ orgId, tenderId, url: "https://evil.example/x.pdf", filename: "x.pdf", fetchImpl: fakeFetch })).rejects.toThrow("non autorisé");
+    await expect(importRemoteDocument({ orgId, tenderId, url: "http://www.boamp.fr/x.pdf", filename: "x.pdf", fetchImpl: fakeFetch })).rejects.toThrow("non autorisé");
+    expect(urls).toHaveLength(1);
+    await prisma.tenderDocument.delete({ where: { id: document.id } }); // n'influence pas la suite
   });
 
   it("refuse l'analyse si l'IA n'est pas activée", async () => {

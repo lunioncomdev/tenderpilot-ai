@@ -133,3 +133,15 @@ export async function deleteDocumentAction(_p: ActionState, fd: FormData): Promi
     return { ok: true };
   });
 }
+
+export async function importNoticePdfAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const tenderId = Id.parse(fd.get("tenderId"));
+    const t = await ownTender(ctx.orgId, tenderId);
+    if (t.origin !== "BOAMP") return { error: "Disponible uniquement pour les avis BOAMP." };
+    await enqueue("import-notice-pdf", { orgId: ctx.orgId, tenderId, userId: ctx.userId }, { jobId: `notice-${tenderId}-${Date.now()}`, attempts: 2 });
+    revalidatePath(`/tenders/${tenderId}`);
+    return { ok: true, message: "Import de l'extrait de l'avis lancé." };
+  });
+}

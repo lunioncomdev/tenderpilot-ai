@@ -6,6 +6,7 @@ export type JobMap = {
   "sync-source": { orgId: string; source: SourceKey; trigger: "manual" | "cron" };
   "sync-all": Record<string, never>;
   "process-document": { orgId: string; documentId: string };
+  "import-notice-pdf": { orgId: string; tenderId: string; userId: string };
   "analyze-tender": { orgId: string; analysisId: string };
   "generate-section": { orgId: string; sectionId: string; instruction?: string };
 };
@@ -16,6 +17,7 @@ export const QUEUE_FOR: Record<JobName, QueueName> = {
   "sync-source": "sync",
   "sync-all": "sync",
   "process-document": "documents",
+  "import-notice-pdf": "documents",
   "analyze-tender": "ai",
   "generate-section": "ai",
 };
