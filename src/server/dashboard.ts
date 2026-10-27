@@ -24,7 +24,7 @@ export async function getDashboard(orgId: string, now = new Date()) {
     OR: [{ deadlineAt: null }, { deadlineAt: { gte: now } }],
   };
 
-  const [newCount, qualified, priority, preparing, upcoming, budget, won, lost, submittedValue, byCountry, cpvRows, weekly, recentScores] =
+  const [newCount, qualified, priority, preparing, upcoming, won, lost, submittedValue, byCountry, cpvRows, weekly, recentScores] =
     await Promise.all([
       prisma.tender.count({ where: { organizationId: orgId, duplicateOfId: null, createdAt: { gte: new Date(now.getTime() - 7 * day) } } }),
       prisma.tender.count({ where: { ...active, status: { in: ["QUALIFIED", "GO"] } } }),
@@ -36,7 +36,6 @@ export async function getDashboard(orgId: string, now = new Date()) {
         take: 8,
         select: { id: true, title: true, deadlineAt: true, status: true },
       }),
-      prisma.tender.aggregate({ where: { ...active, currency: "EUR" }, _sum: { estimatedValue: true } }),
       prisma.tender.count({ where: { organizationId: orgId, status: "WON" } }),
       prisma.tender.count({ where: { organizationId: orgId, status: "LOST" } }),
       prisma.tender.aggregate({ where: { organizationId: orgId, status: { in: ["SUBMITTED", "AWAITING_DECISION", "WON", "LOST"] } }, _sum: { estimatedValue: true } }),
@@ -66,7 +65,6 @@ export async function getDashboard(orgId: string, now = new Date()) {
       qualified,
       priority,
       preparing,
-      budgetTotal: Number(budget._sum.estimatedValue ?? 0),
       submittedValue: Number(submittedValue._sum.estimatedValue ?? 0),
       won,
       lost,
