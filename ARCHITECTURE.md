@@ -18,7 +18,7 @@
                 │              │          ├─ generate-proposal (Claude)           │
                 │              │          └─ cron: sync 6h, échéances 7h          │
                 │              ▼                                                  │
-                │   postgres 16 + pgvector        minio (S3)                      │
+                │   postgres 16 + pgvector     seaweedfs (S3)                     │
                 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -225,7 +225,7 @@ Un **pré-score** (sans DCE) est calculé à l'import à partir des métadonnée
 ## 11. Infrastructure
 
 * `docker-compose.yml` : `postgres` (image `pgvector/pgvector:pg16`), `redis`,
-  `minio` (toujours démarrés) ; `migrate`, `web`, `worker`, `nginx` (profil `app`).
+  `s3` — SeaweedFS (toujours démarrés) ; `migrate`, `web`, `worker`, `nginx` (profil `app`).
 * Développement sans Docker : PostgreSQL embarqué (`pnpm db:dev`), Redis local ;
   pgvector y est absent, ce que les migrations tolèrent.
 * Les colonnes `search_vector` (FTS) sont créées par migration SQL et ignorées par

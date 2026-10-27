@@ -22,8 +22,6 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  // Sortie autonome pour l'image Docker (Linux) ; désactivée ailleurs (liens symboliques sous Windows).
-  output: process.env.NEXT_STANDALONE === "1" ? "standalone" : undefined,
   poweredByHeader: false,
   serverExternalPackages: ["@prisma/client", "bullmq", "ioredis", "pino", "exceljs", "mammoth", "unpdf", "bcryptjs"],
   experimental: {

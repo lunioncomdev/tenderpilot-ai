@@ -22,14 +22,14 @@ Voir [ARCHITECTURE.md](ARCHITECTURE.md) et [TASKS.md](TASKS.md).
 ## Démarrage avec Docker Compose
 
 ```bash
-cp .env.example .env    # puis renseigner SESSION_SECRET, POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD
+cp .env.example .env    # puis renseigner SESSION_SECRET, POSTGRES_PASSWORD, S3_SECRET_ACCESS_KEY
 docker compose --profile app up -d --build
 ```
 
 L'application est servie sur http://localhost:8080 (nginx). Au premier accès,
 `/setup` crée l'organisation et le compte propriétaire (une seule fois).
 
-Services : `postgres` (pgvector), `redis`, `minio`, `migrate` (migrations au
+Services : `postgres` (pgvector), `redis`, `s3` (SeaweedFS), `migrate` (migrations au
 démarrage), `web`, `worker`, `nginx`.
 
 ## Développement local
@@ -39,7 +39,7 @@ Prérequis : Node.js ≥ 20.11, pnpm 9.
 ```bash
 pnpm install
 cp .env.example .env              # puis renseigner les secrets
-docker compose up -d              # postgres + redis + minio seulement
+docker compose up -d              # postgres + redis + s3 seulement
 pnpm db:migrate
 pnpm dev                          # http://localhost:3000
 pnpm worker:dev                   # autre terminal : jobs (sync, extraction, IA)
@@ -81,7 +81,7 @@ tests** (`tests/helpers/fake-llm.ts`) ; il n'est jamais utilisé par l'applicati
 2. `docker compose --profile app up -d --build`.
 3. TLS : placer un reverse proxy (Caddy, ou nginx + certbot) devant le port
    `HTTP_PORT`, ou adapter `deploy/nginx.conf`.
-4. Sauvegardes : volumes `pgdata` (pg_dump quotidien) et `miniodata`.
+4. Sauvegardes : volumes `pgdata` (pg_dump quotidien) et `s3data`.
 
 ## Limites connues (MVP)
 
