@@ -65,6 +65,48 @@ export const TenderAnalysisSchema = z.object({
 });
 
 export type TenderAnalysisResult = z.infer<typeof TenderAnalysisSchema>;
+
+/**
+ * Le schéma complet dépasse la taille de grammaire acceptée par les sorties
+ * structurées de l'API (« compiled grammar is too large »). L'extraction est donc
+ * faite en plusieurs appels sur le même DCE (préfixe mis en cache), chacun avec
+ * un sous-schéma, puis fusionnée et revalidée avec le schéma complet.
+ */
+export const ANALYSIS_PARTS = [
+  {
+    key: "identification",
+    focus: "l'identification de la consultation : objet, acheteur, référence, budget, date limite",
+    schema: TenderAnalysisSchema.pick({
+      summary: true, object: true, buyer: true, consultationReference: true, budget: true,
+      budgetAmountEur: true, deadline: true, deadlineIso: true, injectionAttemptsDetected: true,
+    }),
+  },
+  {
+    key: "conditions",
+    focus: "le calendrier, les lots et les conditions de participation (capacités exigées, certifications, groupement, sous-traitance, visite)",
+    schema: TenderAnalysisSchema.pick({
+      questionsDeadline: true, contractDuration: true, executionDelay: true, lots: true, candidacyConditions: true,
+      requiredCertifications: true, minAnnualRevenueEur: true, minReferences: true, siteVisitMandatory: true,
+      consortiumAllowed: true, subcontractingAllowed: true, injectionAttemptsDetected: true,
+    }),
+  },
+  {
+    key: "technique",
+    focus: "les exigences techniques, compétences, livrables, critères de notation et pièces à fournir",
+    schema: TenderAnalysisSchema.pick({
+      technicalRequirements: true, requiredSkills: true, deliverables: true, awardCriteria: true,
+      mandatoryDocuments: true, injectionAttemptsDetected: true,
+    }),
+  },
+  {
+    key: "conformite",
+    focus: "l'hébergement, la sécurité, le RGPD, l'accessibilité, l'éco-conception, la maintenance, les SLA et les risques contractuels",
+    schema: TenderAnalysisSchema.pick({
+      hostingSecurity: true, gdpr: true, accessibility: true, ecoDesign: true, maintenance: true, sla: true,
+      risks: true, injectionAttemptsDetected: true,
+    }),
+  },
+] as const;
 export type SourceRefT = z.infer<typeof SourceRef>;
 
 /** Après vérification des citations côté serveur. */

@@ -240,8 +240,12 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
     expect(JSON.stringify(score.eliminatory)).toContain("ISO 27001");
     expect((await prisma.tender.findUniqueOrThrow({ where: { id: tenderId } })).status).toBe("QUALIFIED");
 
+    // 4 passes (limite de taille des sorties structurées), une seule comptée dans les quotas
+    expect(fake.calls).toHaveLength(4);
+    expect(new Set(fake.calls.map((c) => c.context)).size).toBe(1); // même préfixe DCE → cache
     const usage = await prisma.aiUsageLog.findMany({ where: { organizationId: orgId } });
-    expect(usage).toHaveLength(1);
+    expect(usage).toHaveLength(4);
+    expect(usage.filter((u) => u.operation === "analyze_tender")).toHaveLength(1);
     expect(Number(usage[0].costUsd)).toBeGreaterThanOrEqual(0);
   });
 

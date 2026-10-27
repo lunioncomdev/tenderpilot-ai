@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { verifySource, verifyAllSources } from "@/server/analysis/citations";
 import { buildDceContext, type DocWithChunks } from "@/server/analysis/context";
-import type { TenderAnalysisResult } from "@/server/analysis/schema";
+import { ANALYSIS_PARTS, TenderAnalysisSchema, type TenderAnalysisResult } from "@/server/analysis/schema";
 import { chunkPages, isHeading } from "@/server/documents/chunk";
 import { cleanText, htmlToText } from "@/server/documents/extract";
 import { detectAllowedType, guessDocumentKind } from "@/server/documents/file-type";
@@ -129,5 +129,13 @@ describe("export DOCX", () => {
   it("convertit le Markdown en blocs Word (titres, listes, tableau)", () => {
     const blocks = markdownToBlocks("### Titre\n\nUn paragraphe **gras**.\n\n- a\n- b\n\n| A | B |\n|---|---|\n| 1 | 2 |");
     expect(blocks.length).toBe(5);
+  });
+});
+
+describe("découpage du schéma d'analyse", () => {
+  it("les passes couvrent exactement tous les champs du schéma complet", () => {
+    const full = Object.keys(TenderAnalysisSchema.shape).sort();
+    const covered = [...new Set(ANALYSIS_PARTS.flatMap((p) => Object.keys(p.schema.shape)))].sort();
+    expect(covered).toEqual(full);
   });
 });

@@ -1,6 +1,6 @@
 import { SAFETY_RULES } from "./common";
 
-export const ANALYZE_TENDER_PROMPT_VERSION = "analyze-tender@2026-10-27.1";
+export const ANALYZE_TENDER_PROMPT_VERSION = "analyze-tender@2026-10-27.2"; // .2 : extraction en 4 passes
 
 export const ANALYZE_TENDER_SYSTEM = `
 Tu es un analyste expert des marchés publics français et européens, spécialisé dans les prestations informatiques (développement, TMA, SaaS, IA, hébergement).

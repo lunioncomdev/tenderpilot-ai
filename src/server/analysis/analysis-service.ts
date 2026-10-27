@@ -8,7 +8,7 @@ import { NotFoundError } from "../auth/rbac";
 import { computeAndStoreScore } from "../scoring/score-service";
 import { verifyAllSources } from "./citations";
 import { buildDceContext } from "./context";
-import { TenderAnalysisSchema } from "./schema";
+import { ANALYSIS_PARTS, TenderAnalysisSchema } from "./schema";
 
 /** Crée une demande d'analyse (le traitement est fait par le worker). */
 export async function requestAnalysis(orgId: string, tenderId: string, userId: string) {
@@ -46,24 +46,41 @@ export async function runAnalysis(orgId: string, analysisId: string) {
     const ctx = buildDceContext(tender.documents, env().AI_MAX_DCE_TOKENS);
     if (ctx.refs.size === 0) throw new Error("Aucun texte exploitable dans les documents");
 
-    const res = await callStructured(
-      orgId,
-      {
-        operation: "analyze_tender",
-        promptVersion: ANALYZE_TENDER_PROMPT_VERSION,
-        system: ANALYZE_TENDER_SYSTEM,
-        context: ctx.text,
-        prompt: analyzeTenderPrompt({
-          title: tender.title,
-          buyer: tender.buyerName,
-          reference: tender.publicationRef ?? tender.externalId,
-          excluded: ctx.excluded,
-        }),
-        schema: TenderAnalysisSchema,
-        maxTokens: 48_000,
-      },
-      analysis.id,
-    );
+    // Extraction en plusieurs passes (limite de taille des sorties structurées) ;
+    // le préfixe système + DCE est identique d'une passe à l'autre, donc mis en cache.
+    const basePrompt = analyzeTenderPrompt({
+      title: tender.title,
+      buyer: tender.buyerName,
+      reference: tender.publicationRef ?? tender.externalId,
+      excluded: ctx.excluded,
+    });
+    const merged: Record<string, unknown> = {};
+    const injections = new Set<string>();
+    let model = "";
+    for (const [i, part] of ANALYSIS_PARTS.entries()) {
+      const res = await callStructured(
+        orgId,
+        {
+          // Seule la première passe porte le nom compté dans les quotas mensuels.
+          operation: i === 0 ? "analyze_tender" : `analyze_tender:${part.key}`,
+          promptVersion: ANALYZE_TENDER_PROMPT_VERSION,
+          system: ANALYZE_TENDER_SYSTEM,
+          context: ctx.text,
+          prompt: `${basePrompt}
+
+Passe ${i + 1}/${ANALYSIS_PARTS.length} : concentre-toi sur ${part.focus}. Ne remplis que les champs du schéma de sortie.`,
+          schema: part.schema as unknown as typeof TenderAnalysisSchema,
+          maxTokens: 32_000,
+        },
+        analysis.id,
+      );
+      const { injectionAttemptsDetected, ...fields } = res.data as Record<string, unknown> & { injectionAttemptsDetected?: string[] };
+      for (const x of injectionAttemptsDetected ?? []) injections.add(x);
+      Object.assign(merged, fields);
+      model = res.model;
+    }
+    const full = TenderAnalysisSchema.parse({ ...merged, injectionAttemptsDetected: [...injections] });
+    const res = { data: full, model };
 
     const { value, stats } = verifyAllSources(res.data, ctx.refs);
     const done = await prisma.tenderAnalysis.update({
