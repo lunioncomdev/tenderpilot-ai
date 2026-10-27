@@ -62,7 +62,7 @@ export async function createProposal(orgId: string, tenderId: string, userId: st
   return proposal;
 }
 
-function companyBlock(p: CompanyProfile | null): string {
+export function companyBlock(p: CompanyProfile | null): string {
   if (!p) return "Profil entreprise non renseigné.";
   const lines = [
     `PROFIL.legalName : ${p.legalName}`,
@@ -81,6 +81,13 @@ function companyBlock(p: CompanyProfile | null): string {
     p.accessibility && `PROFIL.accessibility : ${p.accessibility}`,
   ];
   return lines.filter(Boolean).join("\n");
+}
+
+/** Références numérotées REF-n, seules références citables par l'IA. */
+export function formatReferences(refs: CompanyReference[]): string {
+  return refs
+    .map((r, i) => `REF-${i + 1} : ${r.title} — client : ${r.client}${r.year ? ` (${r.year})` : ""}${r.amountEur ? `, ${r.amountEur} €` : ""}. ${r.description} Technologies : ${r.technologies.join(", ")}`)
+    .join("\n");
 }
 
 /** Sélection des références les plus proches (recouvrement lexical). */
@@ -148,9 +155,7 @@ export async function generateSection(orgId: string, sectionId: string, instruct
             .join("\n"),
           requirements: (analysis?.technicalRequirements ?? []).slice(0, 40).map((r) => `- ${r.text}`).join("\n"),
           company: companyBlock(profile),
-          references: ranked
-            .map((r, i) => `REF-${i + 1} : ${r.title} — client : ${r.client}${r.year ? ` (${r.year})` : ""}${r.amountEur ? `, ${r.amountEur} €` : ""}. ${r.description} Technologies : ${r.technologies.join(", ")}`)
-            .join("\n"),
+          references: formatReferences(ranked),
           previousContent: section.content || undefined,
           instruction,
         }),

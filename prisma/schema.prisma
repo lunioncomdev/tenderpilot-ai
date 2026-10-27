@@ -49,16 +49,16 @@ model Organization {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
+  id           String    @id @default(cuid())
+  email        String    @unique
   name         String
   passwordHash String
-  createdAt    DateTime @default(now())
+  createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
 
   memberships     Membership[]
   sessions        Session[]
-  assignedTenders Tender[]     @relation("TenderAssignee")
+  assignedTenders Tender[]      @relation("TenderAssignee")
   comments        Comment[]
   auditLogs       AuditLog[]
   savedSearches   SavedSearch[]
@@ -130,7 +130,7 @@ model CompanyReference {
   organizationId String
   title          String
   client         String
-  clientType     String?      // public / privé
+  clientType     String? // public / privé
   year           Int?
   amountEur      Int?
   durationMonths Int?
@@ -222,16 +222,16 @@ model Tender {
   id               String       @id @default(cuid())
   organizationId   String
   origin           TenderOrigin
-  externalId       String       // idweb BOAMP, notice-identifier TED, uuid manuel
-  publicationRef   String?      // n° de publication officiel affichable
-  procedureId      String?      // identifiant de procédure eForms (dédoublonnage fort)
-  dedupKey         String       // empreinte acheteur+objet+date limite (dédoublonnage faible)
+  externalId       String // idweb BOAMP, notice-identifier TED, uuid manuel
+  publicationRef   String? // n° de publication officiel affichable
+  procedureId      String? // identifiant de procédure eForms (dédoublonnage fort)
+  dedupKey         String // empreinte acheteur+objet+date limite (dédoublonnage faible)
   duplicateOfId    String?
   title            String
   description      String       @default("")
   buyerName        String       @default("")
-  buyerCountry     String?      // ISO alpha-2
-  region           String?      // département / NUTS
+  buyerCountry     String? // ISO alpha-2
+  region           String? // département / NUTS
   cpvCodes         String[]     @default([])
   estimatedValue   Decimal?     @db.Decimal(14, 2)
   currency         String?
@@ -239,7 +239,7 @@ model Tender {
   deadlineAt       DateTime?
   procedureType    String?
   noticeType       String?
-  contractType     String?      // SERVICES, FOURNITURES, TRAVAUX
+  contractType     String? // SERVICES, FOURNITURES, TRAVAUX
   durationMonths   Int?
   isPublicMarket   Boolean      @default(true)
   allowsConsortium Boolean?
@@ -311,24 +311,24 @@ enum DocumentStatus {
 }
 
 model TenderDocument {
-  id             String         @id @default(cuid())
+  id             String           @id @default(cuid())
   organizationId String
   tenderId       String
-  parentId       String?        // ZIP d'origine
+  parentId       String? // ZIP d'origine
   filename       String
   mimeType       String
   sizeBytes      Int
   sha256         String
   storageKey     String
-  kind           DocumentKind   @default(AUTRE)
-  status         DocumentStatus @default(UPLOADED)
+  kind           DocumentKind     @default(AUTRE)
+  status         DocumentStatus   @default(UPLOADED)
   pageCount      Int?
   charCount      Int?
   error          String?
   uploadedById   String?
-  createdAt      DateTime       @default(now())
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  tender         Tender         @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  createdAt      DateTime         @default(now())
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tender         Tender           @relation(fields: [tenderId], references: [id], onDelete: Cascade)
   parent         TenderDocument?  @relation("DocumentParent", fields: [parentId], references: [id], onDelete: Cascade)
   children       TenderDocument[] @relation("DocumentParent")
   chunks         DocumentChunk[]
@@ -366,20 +366,20 @@ enum JobStatus {
 }
 
 model TenderAnalysis {
-  id             String       @id @default(cuid())
+  id             String        @id @default(cuid())
   organizationId String
   tenderId       String
-  status         JobStatus    @default(PENDING)
+  status         JobStatus     @default(PENDING)
   model          String?
   promptVersion  String?
   result         Json?
-  citationStats  Json?        // { total, verified }
+  citationStats  Json? // { total, verified }
   error          String?
   requestedById  String?
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime      @default(now())
   finishedAt     DateTime?
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  tender         Tender       @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tender         Tender        @relation(fields: [tenderId], references: [id], onDelete: Cascade)
   scores         TenderScore[]
 
   @@index([organizationId, tenderId, createdAt])
@@ -392,23 +392,23 @@ enum Recommendation {
 }
 
 model TenderScore {
-  id             String         @id @default(cuid())
+  id             String          @id @default(cuid())
   organizationId String
   tenderId       String
   analysisId     String?
   total          Int
-  breakdown      Json           // [{ key, label, weight, points, rationale }]
-  eliminatory    Json           // [{ key, label, status, detail }]
+  breakdown      Json // [{ key, label, weight, points, rationale }]
+  eliminatory    Json // [{ key, label, status, detail }]
   recommendation Recommendation
-  strengths      String[]       @default([])
-  weaknesses     String[]       @default([])
-  missingInfo    String[]       @default([])
-  risks          String[]       @default([])
+  strengths      String[]        @default([])
+  weaknesses     String[]        @default([])
+  missingInfo    String[]        @default([])
+  risks          String[]        @default([])
   justification  String
   weights        Json
-  createdAt      DateTime       @default(now())
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  tender         Tender         @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  createdAt      DateTime        @default(now())
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tender         Tender          @relation(fields: [tenderId], references: [id], onDelete: Cascade)
   analysis       TenderAnalysis? @relation(fields: [analysisId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, tenderId, createdAt])
@@ -417,7 +417,7 @@ model TenderScore {
 model AiUsageLog {
   id               String       @id @default(cuid())
   organizationId   String
-  operation        String       // analyze_tender | generate_section | ...
+  operation        String // analyze_tender | generate_section | ...
   provider         String
   model            String
   promptVersion    String?
@@ -455,37 +455,39 @@ enum SectionStatus {
 }
 
 model Proposal {
-  id             String         @id @default(cuid())
-  organizationId String
-  tenderId       String
-  title          String
-  status         ProposalStatus @default(DRAFT)
-  createdById    String?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  tender         Tender         @relation(fields: [tenderId], references: [id], onDelete: Cascade)
-  sections       ProposalSection[]
-  compliance     ComplianceItem[]
+  id                     String            @id @default(cuid())
+  organizationId         String
+  tenderId               String
+  title                  String
+  status                 ProposalStatus    @default(DRAFT)
+  complianceGeneratingAt DateTime? // génération IA de la matrice en cours
+  complianceError        String?
+  createdById            String?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  organization           Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tender                 Tender            @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  sections               ProposalSection[]
+  compliance             ComplianceItem[]
 
   @@index([organizationId, tenderId])
 }
 
 model ProposalSection {
-  id         String        @id @default(cuid())
+  id         String                   @id @default(cuid())
   proposalId String
   key        String
   title      String
   order      Int
-  guidance   String        @default("") // critères du RC visés par la section
-  content    String        @default("")
-  status     SectionStatus @default(PENDING)
-  sources    Json          @default("[]")
-  toValidate String[]      @default([])
-  version    Int           @default(0)
+  guidance   String                   @default("") // critères du RC visés par la section
+  content    String                   @default("")
+  status     SectionStatus            @default(PENDING)
+  sources    Json                     @default("[]")
+  toValidate String[]                 @default([])
+  version    Int                      @default(0)
   error      String?
-  updatedAt  DateTime      @updatedAt
-  proposal   Proposal      @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  updatedAt  DateTime                 @updatedAt
+  proposal   Proposal                 @relation(fields: [proposalId], references: [id], onDelete: Cascade)
   versions   ProposalSectionVersion[]
 
   @@unique([proposalId, key])
@@ -496,7 +498,7 @@ model ProposalSectionVersion {
   sectionId String
   version   Int
   content   String
-  author    String          // "ai:<model>" ou id utilisateur
+  author    String // "ai:<model>" ou id utilisateur
   createdAt DateTime        @default(now())
   section   ProposalSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
 
@@ -519,6 +521,7 @@ model ComplianceItem {
   evidence    String           @default("")
   status      ComplianceStatus @default(TO_VERIFY)
   source      String           @default("")
+  aiGenerated Boolean          @default(false) // réponse proposée par l'IA, à valider
   proposal    Proposal         @relation(fields: [proposalId], references: [id], onDelete: Cascade)
 
   @@index([proposalId])

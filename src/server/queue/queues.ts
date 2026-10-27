@@ -9,6 +9,7 @@ export type JobMap = {
   "import-notice-pdf": { orgId: string; tenderId: string; userId: string };
   "analyze-tender": { orgId: string; analysisId: string };
   "generate-section": { orgId: string; sectionId: string; instruction?: string };
+  "generate-compliance": { orgId: string; proposalId: string; overwrite: boolean };
 };
 
 export type JobName = keyof JobMap;
@@ -20,6 +21,7 @@ export const QUEUE_FOR: Record<JobName, QueueName> = {
   "import-notice-pdf": "documents",
   "analyze-tender": "ai",
   "generate-section": "ai",
+  "generate-compliance": "ai",
 };
 
 export type QueueName = "sync" | "documents" | "ai";

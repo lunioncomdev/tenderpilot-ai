@@ -15,7 +15,7 @@ import { hasRole } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
 import { Sources } from "../../tenders/[id]/analysis-view";
 import {
-  generateAllAction, generateSectionAction, restoreVersionAction, saveComplianceAction, saveSectionAction,
+  generateComplianceAction, generateEverythingAction, generateSectionAction, restoreVersionAction, saveComplianceAction, saveSectionAction,
   setProposalStatusAction, validateSectionAction,
 } from "../actions";
 import { SectionEditor } from "./section-editor";
@@ -36,9 +36,13 @@ export default async function ProposalPage({ params }: { params: Promise<{ id: s
   if (!proposal) notFound();
   const canEdit = hasRole(ctx.role, "MEMBER");
   const ai = aiStatus();
-  const generating = proposal.sections.some((s) => s.status === "GENERATING");
+  const sectionsGenerating = proposal.sections.filter((s) => s.status === "GENERATING").length;
+  const matrixGenerating = !!proposal.complianceGeneratingAt;
+  const generating = sectionsGenerating > 0 || matrixGenerating;
   const validated = proposal.sections.filter((s) => s.status === "VALIDATED").length;
   const pending = proposal.sections.filter((s) => s.status === "PENDING" || s.status === "FAILED").length;
+  const drafts = proposal.sections.filter((s) => s.status === "AI_DRAFT" || s.status === "EDITED").length;
+  const matrixEmpty = proposal.compliance.filter((c) => !c.response.trim()).length;
 
   return (
     <>
@@ -49,17 +53,39 @@ export default async function ProposalPage({ params }: { params: Promise<{ id: s
         description={`${validated}/${proposal.sections.length} sections validées. Toute affirmation non issue du profil entreprise est marquée [À VALIDER].`}
         actions={
           <>
-            {canEdit && pending > 0 && (
-              <ActionForm action={generateAllAction}>
-                <input type="hidden" name="proposalId" value={proposal.id} />
-                <SubmitButton disabled={!ai.enabled || generating} pendingText="Lancement…"><Sparkles /> Générer les {pending} sections restantes</SubmitButton>
-              </ActionForm>
-            )}
             <a href={`/api/v1/proposals/${proposal.id}/export`} className={buttonVariants({ variant: "outline" })}><Download /> Export DOCX</a>
           </>
         }
       />
       {!ai.enabled && <Alert tone="warning" className="mb-4">IA indisponible : {ai.reason}. L&apos;édition manuelle reste possible.</Alert>}
+
+      {canEdit && (
+        <Card className="mb-6 border-primary/30 bg-accent/40">
+          <CardContent className="flex flex-col gap-3 pt-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-2 font-semibold"><Sparkles className="size-4 text-primary" /> Générer toutes les réponses par l&apos;IA</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {pending} section(s) à rédiger · {drafts} brouillon(s) · {matrixEmpty}/{proposal.compliance.length} réponse(s) de la matrice vide(s).
+                  Les sections validées ne sont jamais modifiées ; tout le contenu généré reste à relire et valider.
+                </p>
+              </div>
+              {generating && (
+                <Badge tone="primary">
+                  En cours : {sectionsGenerating} section(s){matrixGenerating ? " + matrice" : ""}
+                </Badge>
+              )}
+            </div>
+            <ActionForm action={generateEverythingAction} className="flex flex-wrap items-center gap-3">
+              <input type="hidden" name="proposalId" value={proposal.id} />
+              <SubmitButton disabled={!ai.enabled || generating} pendingText="Lancement…"><Sparkles /> Tout générer par l&apos;IA</SubmitButton>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" name="includeDrafts" className="size-4" /> Régénérer aussi les brouillons non validés et les réponses proposées par l&apos;IA
+              </label>
+            </ActionForm>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <span className="text-sm">Statut du mémoire :</span>
@@ -166,8 +192,21 @@ export default async function ProposalPage({ params }: { params: Promise<{ id: s
 
           <Card id="conformite" className="scroll-mt-20">
             <CardHeader>
-              <CardTitle>Matrice de conformité</CardTitle>
-              <CardDescription>Générée depuis les critères, exigences et pièces extraits du DCE. À compléter et valider.</CardDescription>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle>Matrice de conformité</CardTitle>
+                {canEdit && proposal.compliance.length > 0 && (
+                  <ActionForm action={generateComplianceAction} className="flex items-center gap-2">
+                    <input type="hidden" name="proposalId" value={proposal.id} />
+                    <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" name="overwrite" /> remplacer les réponses IA</label>
+                    <SubmitButton size="sm" variant="outline" disabled={!ai.enabled || matrixGenerating}><Sparkles /> Générer les réponses</SubmitButton>
+                  </ActionForm>
+                )}
+              </div>
+              <CardDescription>
+                Exigences extraites du DCE. Les réponses marquées « IA » sont des propositions : modifiez-les et enregistrez pour les valider (elles ne seront plus remplacées).
+              </CardDescription>
+              {matrixGenerating && <Alert className="mt-2">Génération des réponses en cours…</Alert>}
+              {proposal.complianceError && <Alert tone="danger" className="mt-2">Échec de la génération : {proposal.complianceError}</Alert>}
             </CardHeader>
             <CardContent>
               <Table>
@@ -175,7 +214,10 @@ export default async function ProposalPage({ params }: { params: Promise<{ id: s
                 <tbody className="divide-y">
                   {proposal.compliance.map((c) => (
                     <tr key={c.id} className="align-top">
-                      <Td className="max-w-xs">{c.requirement}</Td>
+                      <Td className="max-w-xs">
+                        {c.requirement}
+                        {c.aiGenerated && <Badge tone="warning" className="ml-1.5">IA</Badge>}
+                      </Td>
                       <Td colSpan={3} className="p-0">
                         <ActionForm action={saveComplianceAction} className="grid grid-cols-[1fr_1fr_9rem_auto] items-start gap-2 p-2">
                           <input type="hidden" name="itemId" value={c.id} />

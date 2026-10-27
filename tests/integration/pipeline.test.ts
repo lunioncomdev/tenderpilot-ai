@@ -16,6 +16,8 @@ import { requestAnalysis, runAnalysis } from "@/server/analysis/analysis-service
 import type { TenderAnalysisResult } from "@/server/analysis/schema";
 import { createProposal, requestSectionGeneration, generateSection, saveSectionEdit } from "@/server/proposals/proposal-service";
 import { buildProposalDocx } from "@/server/proposals/docx-export";
+import { generateCompliance, requestComplianceGeneration } from "@/server/proposals/compliance-service";
+import type { ComplianceOutput } from "@/server/ai/prompts/generate-compliance";
 import { searchTenders } from "@/server/tenders/search";
 import { FakeLlmProvider } from "../helpers/fake-llm";
 import { makeDocx, makePdf, makeXlsx, makeZip } from "../helpers/fixtures-builders";
@@ -314,5 +316,42 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
     expect(xml).toContain("[À VALIDER]");
     expect(xml).toContain("Matrice de conformité");
     expect(xml).toContain("DOCUMENT DE TRAVAIL");
+  });
+
+  it("génère les réponses de la matrice sans écraser les décisions humaines", async () => {
+    const proposal = await prisma.proposal.findFirstOrThrow({ where: { tenderId }, include: { compliance: { orderBy: { order: "asc" } } } });
+    const items = proposal.compliance;
+    expect(items.length).toBeGreaterThanOrEqual(3);
+    // une ligne décidée par un humain
+    await prisma.complianceItem.update({ where: { id: items[0].id }, data: { response: "Réponse humaine", status: "COMPLIANT" } });
+
+    const answer = (prompt: string): ComplianceOutput => ({
+      items: [
+        ...[...prompt.matchAll(/^#(\d+) /gm)].map((m) => ({ index: Number(m[1]), response: `Réponse IA ${m[1]}`, evidence: "", status: "TO_VERIFY" as const })),
+        { index: 999, response: "hors liste", evidence: "", status: "COMPLIANT" }, // numéro inexistant : ignoré
+      ],
+    });
+    const fake = new FakeLlmProvider((req) => answer(req.prompt));
+    setProviderForTests(fake);
+
+    await requestComplianceGeneration(orgId, proposal.id);
+    expect((await prisma.proposal.findUniqueOrThrow({ where: { id: proposal.id } })).complianceGeneratingAt).not.toBeNull();
+    await generateCompliance(orgId, proposal.id);
+    let after = await prisma.complianceItem.findMany({ where: { proposalId: proposal.id }, orderBy: { order: "asc" } });
+    expect(after[0]).toMatchObject({ response: "Réponse humaine", status: "COMPLIANT", aiGenerated: false });
+    expect(after.slice(1).every((c) => c.aiGenerated && c.response.startsWith("Réponse IA"))).toBe(true);
+    expect(fake.calls[0].system).toContain("N'invente jamais");
+    expect(fake.calls[0].prompt).not.toContain("Réponse humaine");
+    expect((await prisma.proposal.findUniqueOrThrow({ where: { id: proposal.id } })).complianceGeneratingAt).toBeNull();
+
+    // Régénération avec remplacement : les réponses IA sont remplacées, la réponse humaine reste
+    setProviderForTests(new FakeLlmProvider((req) => ({ items: [...req.prompt.matchAll(/^#(\d+) /gm)].map((m) => ({ index: Number(m[1]), response: `V2 ${m[1]}`, evidence: "REF-1", status: "PARTIAL" as const })) })));
+    await generateCompliance(orgId, proposal.id, true);
+    after = await prisma.complianceItem.findMany({ where: { proposalId: proposal.id }, orderBy: { order: "asc" } });
+    expect(after[0].response).toBe("Réponse humaine");
+    expect(after.slice(1).every((c) => c.response.startsWith("V2") && c.evidence === "REF-1")).toBe(true);
+
+    expect(await prisma.aiUsageLog.count({ where: { organizationId: orgId, operation: "generate_compliance" } })).toBe(2);
+    await expect(generateCompliance(otherOrgId, proposal.id)).rejects.toThrow("introuvable");
   });
 });

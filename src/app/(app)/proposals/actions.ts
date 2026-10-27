@@ -9,6 +9,7 @@ import { requireContext } from "@/server/auth/context";
 import { NotFoundError } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
 import { requestSectionGeneration, saveSectionEdit, setSectionValidated } from "@/server/proposals/proposal-service";
+import { requestComplianceGeneration } from "@/server/proposals/compliance-service";
 import { enqueue } from "@/server/queue/queues";
 
 const Id = z.string().min(1).max(40);
@@ -33,21 +34,45 @@ export async function generateSectionAction(_p: ActionState, fd: FormData): Prom
   });
 }
 
-/** Génère toutes les sections encore vides (déclenchement explicite, coûts maîtrisés). */
-export async function generateAllAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+/**
+ * Génère par l'IA tout le mémoire : sections non rédigées (et, sur option, les
+ * brouillons non validés) puis les réponses de la matrice de conformité.
+ * Les sections validées ne sont jamais régénérées.
+ */
+export async function generateEverythingAction(_p: ActionState, fd: FormData): Promise<ActionState> {
   return runAction(async () => {
     const ctx = await requireContext("MEMBER");
     const proposalId = Id.parse(fd.get("proposalId"));
-    const proposal = await prisma.proposal.findFirst({ where: { id: proposalId, organizationId: ctx.orgId }, include: { sections: true } });
+    const includeDrafts = fd.get("includeDrafts") === "on";
+    const proposal = await prisma.proposal.findFirst({ where: { id: proposalId, organizationId: ctx.orgId }, include: { sections: true, compliance: true } });
     if (!proposal) throw new NotFoundError("Mémoire introuvable");
-    const todo = proposal.sections.filter((s) => s.status === "PENDING" || s.status === "FAILED");
+    const regenerable = includeDrafts ? ["PENDING", "FAILED", "AI_DRAFT", "EDITED"] : ["PENDING", "FAILED"];
+    const todo = proposal.sections.filter((s) => regenerable.includes(s.status));
     for (const s of todo) {
       await requestSectionGeneration(ctx.orgId, s.id);
       await enqueue("generate-section", { orgId: ctx.orgId, sectionId: s.id }, { attempts: 2 });
     }
-    await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "proposal.generation_requested", entityType: "Proposal", entityId: proposalId, metadata: { sections: todo.length } });
+    const matrix = proposal.compliance.length > 0 && !proposal.complianceGeneratingAt;
+    if (matrix) {
+      await requestComplianceGeneration(ctx.orgId, proposalId);
+      await enqueue("generate-compliance", { orgId: ctx.orgId, proposalId, overwrite: includeDrafts }, { attempts: 2 });
+    }
+    await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "proposal.generation_requested", entityType: "Proposal", entityId: proposalId, metadata: { sections: todo.length, matrix, includeDrafts } });
     revalidatePath(`/proposals/${proposalId}`);
-    return { ok: true, message: `${todo.length} section(s) en cours de génération.` };
+    if (!todo.length && !matrix) return { message: "Rien à générer : toutes les sections sont rédigées ou validées." };
+    return { ok: true, message: `Génération lancée : ${todo.length} section(s)${matrix ? " et la matrice de conformité" : ""}.` };
+  });
+}
+
+export async function generateComplianceAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const proposalId = Id.parse(fd.get("proposalId"));
+    const overwrite = fd.get("overwrite") === "on";
+    await requestComplianceGeneration(ctx.orgId, proposalId);
+    await enqueue("generate-compliance", { orgId: ctx.orgId, proposalId, overwrite }, { attempts: 2 });
+    revalidatePath(`/proposals/${proposalId}`);
+    return { ok: true, message: "Génération des réponses de la matrice lancée." };
   });
 }
 
@@ -100,7 +125,7 @@ export async function saveComplianceAction(_p: ActionState, fd: FormData): Promi
     const d = ComplianceSchema.parse({ itemId: fd.get("itemId"), response: fd.get("response") ?? "", evidence: fd.get("evidence") ?? "", status: fd.get("status") });
     const item = await prisma.complianceItem.findFirst({ where: { id: d.itemId, proposal: { organizationId: ctx.orgId } } });
     if (!item) throw new NotFoundError("Exigence introuvable");
-    await prisma.complianceItem.update({ where: { id: item.id }, data: { response: d.response, evidence: d.evidence, status: d.status } });
+    await prisma.complianceItem.update({ where: { id: item.id }, data: { response: d.response, evidence: d.evidence, status: d.status, aiGenerated: false } });
     revalidatePath(`/proposals/${item.proposalId}`);
     return { ok: true, message: "Enregistré." };
   });

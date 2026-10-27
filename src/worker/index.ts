@@ -7,6 +7,7 @@ import { runAnalysis } from "@/server/analysis/analysis-service";
 import { ALL_SOURCES } from "@/server/connectors/registry";
 import { importBoampNoticePdf } from "@/server/documents/boamp-notice";
 import { processDocument } from "@/server/documents/document-service";
+import { generateCompliance } from "@/server/proposals/compliance-service";
 import { generateSection } from "@/server/proposals/proposal-service";
 import { enqueue, getQueue, type JobMap, type QueueName } from "@/server/queue/queues";
 import { runSync } from "@/server/sync/sync-service";
@@ -40,6 +41,10 @@ async function handle(job: Job) {
     case "generate-section": {
       const d = job.data as JobMap["generate-section"];
       return generateSection(d.orgId, d.sectionId, d.instruction);
+    }
+    case "generate-compliance": {
+      const d = job.data as JobMap["generate-compliance"];
+      return generateCompliance(d.orgId, d.proposalId, d.overwrite);
     }
     default:
       throw new UnrecoverableError(`Job inconnu : ${job.name}`);
