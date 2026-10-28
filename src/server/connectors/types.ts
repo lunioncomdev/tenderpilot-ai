@@ -2,7 +2,7 @@ export type NoticeKind = "TENDER" | "CORRECTION" | "CANCELLATION" | "AWARD" | "P
 
 /** Avis normalisé, indépendant de la source. */
 export type NormalizedNotice = {
-  source: "BOAMP" | "TED";
+  source: "BOAMP" | "TED" | "APPROCH";
   externalId: string;
   publicationRef: string;
   procedureId: string | null;
@@ -40,7 +40,7 @@ export type ConnectorQuery = {
 };
 
 export interface TenderConnector {
-  readonly key: "BOAMP" | "TED";
+  readonly key: "BOAMP" | "TED" | "APPROCH";
   readonly label: string;
   readonly description: string;
   /** Récupère les avis (pagination gérée par le connecteur). */

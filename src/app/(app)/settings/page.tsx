@@ -1,5 +1,6 @@
 import { ActionForm, SubmitButton } from "@/components/form";
-import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, Field, Input, PageHeader, Select, Table, Td, Th } from "@/components/ui/primitives";
+import { parseSort, SortTh, sortRows } from "@/components/sortable";
+import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, Field, Input, PageHeader, Select, Table, Td } from "@/components/ui/primitives";
 import { formatDateTime } from "@/lib/utils";
 import { aiStatus, monthlySpendUsd, PLAN_LIMITS } from "@/server/ai/gateway";
 import { requireContext } from "@/server/auth/context";
@@ -11,15 +12,35 @@ import { addMemberAction, saveWeightsAction } from "./actions";
 
 export const metadata = { title: "Paramètres" };
 
-export default async function SettingsPage() {
+const USAGE_SORT = ["date", "operation", "tokens", "cost", "success"] as const;
+const MEMBER_SORT = ["name", "email", "role", "login"] as const;
+
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const ctx = await requireContext();
-  const [org, profile, members, usage, spend] = await Promise.all([
+  const sp = await searchParams;
+  const usageSort = parseSort(sp, USAGE_SORT, { key: "date", dir: "desc" }, "u_");
+  const memberSort = parseSort(sp, MEMBER_SORT, { key: "name", dir: "asc" }, "m_");
+  const [org, profile, memberRows, usageRows, spend] = await Promise.all([
     prisma.organization.findUniqueOrThrow({ where: { id: ctx.orgId } }),
     prisma.companyProfile.findUnique({ where: { organizationId: ctx.orgId } }),
     prisma.membership.findMany({ where: { organizationId: ctx.orgId }, include: { user: true }, orderBy: { createdAt: "asc" } }),
     prisma.aiUsageLog.findMany({ where: { organizationId: ctx.orgId }, orderBy: { createdAt: "desc" }, take: 25 }),
     monthlySpendUsd(ctx.orgId),
   ]);
+  // Tri des 25 derniers appels (la liste reste celle des plus récents).
+  const usage = sortRows(usageRows, usageSort, {
+    date: (u) => u.createdAt,
+    operation: (u) => u.operation,
+    tokens: (u) => u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens + u.outputTokens,
+    cost: (u) => Number(u.costUsd),
+    success: (u) => u.success,
+  });
+  const members = sortRows(memberRows, memberSort, {
+    name: (m) => m.user.name,
+    email: (m) => m.user.email,
+    role: (m) => ROLE_LABELS[m.role],
+    login: (m) => m.user.lastLoginAt,
+  });
   const raw = (profile?.scoringWeights ?? {}) as Record<string, number>;
   const effective = resolveWeights(profile?.scoringWeights);
   const isAdmin = hasRole(ctx.role, "ADMIN");
@@ -50,14 +71,22 @@ export default async function SettingsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Intelligence artificielle</CardTitle>
-            <CardDescription>Fournisseur : Anthropic (Claude). Les appels sont déclenchés manuellement, jamais à la détection.</CardDescription>
+            <CardDescription>Fournisseur : Anthropic (Claude). Les nouveaux avis BOAMP sont analysés automatiquement après import de leur extrait ; les autres appels sont déclenchés manuellement.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm">
             <Alert tone={ai.enabled ? "success" : "warning"}>{ai.enabled ? `Active — modèle ${ai.model}, effort ${env().AI_EFFORT}.` : `Inactive : ${ai.reason}.`}</Alert>
             <p>Dépense estimée ce mois : <strong>{spend.toFixed(2)} USD</strong> / budget {env().AI_MONTHLY_BUDGET_USD} USD.</p>
             <p className="text-muted-foreground">Quotas de l&apos;offre : {limits.analysesPerMonth} analyses et {limits.sectionsPerMonth} sections par mois, {limits.maxUsers} utilisateurs.</p>
             <Table>
-              <thead className="border-b"><tr><Th>Date</Th><Th>Opération</Th><Th className="text-right">Tokens in/out</Th><Th className="text-right">Coût</Th><Th>État</Th></tr></thead>
+              <thead className="border-b">
+                <tr>
+                  <SortTh label="Date" column="date" sort={usageSort} params={sp} prefix="u_" firstDir="desc" />
+                  <SortTh label="Opération" column="operation" sort={usageSort} params={sp} prefix="u_" />
+                  <SortTh label="Tokens in/out" column="tokens" sort={usageSort} params={sp} prefix="u_" firstDir="desc" className="text-right" />
+                  <SortTh label="Coût" column="cost" sort={usageSort} params={sp} prefix="u_" firstDir="desc" className="text-right" />
+                  <SortTh label="État" column="success" sort={usageSort} params={sp} prefix="u_" />
+                </tr>
+              </thead>
               <tbody className="divide-y">
                 {usage.map((u) => (
                   <tr key={u.id}>
@@ -78,7 +107,14 @@ export default async function SettingsPage() {
           <CardHeader><CardTitle>Utilisateurs</CardTitle></CardHeader>
           <CardContent className="flex flex-col gap-4">
             <Table>
-              <thead className="border-b"><tr><Th>Nom</Th><Th>E-mail</Th><Th>Rôle</Th><Th>Dernière connexion</Th></tr></thead>
+              <thead className="border-b">
+                <tr>
+                  <SortTh label="Nom" column="name" sort={memberSort} params={sp} prefix="m_" />
+                  <SortTh label="E-mail" column="email" sort={memberSort} params={sp} prefix="m_" />
+                  <SortTh label="Rôle" column="role" sort={memberSort} params={sp} prefix="m_" />
+                  <SortTh label="Dernière connexion" column="login" sort={memberSort} params={sp} prefix="m_" firstDir="desc" />
+                </tr>
+              </thead>
               <tbody className="divide-y">
                 {members.map((m) => (
                   <tr key={m.id}><Td>{m.user.name}</Td><Td>{m.user.email}</Td><Td>{ROLE_LABELS[m.role]}</Td><Td>{m.user.lastLoginAt ? formatDateTime(m.user.lastLoginAt) : "—"}</Td></tr>

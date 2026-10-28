@@ -30,7 +30,7 @@ export const fr = {
     LOST: "Perdu",
   } satisfies Record<TenderStatus, string>,
   noticeState: { ACTIVE: "Actif", MODIFIED: "Rectifié", CANCELLED: "Annulé", AWARDED: "Attribué" } satisfies Record<NoticeState, string>,
-  origin: { BOAMP: "BOAMP", TED: "TED", MANUAL: "Saisie manuelle" } satisfies Record<TenderOrigin, string>,
+  origin: { BOAMP: "BOAMP", TED: "TED", APPROCH: "APProch (projet d'achat)", MANUAL: "Saisie manuelle" } satisfies Record<TenderOrigin, string>,
   recommendation: { GO: "GO", NO_GO: "NO-GO", TO_VERIFY: "À vérifier" } satisfies Record<Recommendation, string>,
   documentKind: {
     RC: "Règlement de consultation", CCTP: "CCTP", CCAP: "CCAP", AE: "Acte d'engagement", BPU: "BPU", DPGF: "DPGF",

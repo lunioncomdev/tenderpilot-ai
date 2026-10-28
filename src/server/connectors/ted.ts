@@ -1,12 +1,14 @@
 import { COUNTRY_ISO2_TO_ISO3, COUNTRY_ISO3_TO_ISO2 } from "./defaults";
 import { ThrottledHttp } from "./http";
-import { durationToMonths, parseEformsDateTime, pickLang, uniq } from "./parse";
+import { cpvToPattern, durationToMonths, parseEformsDateTime, pickLang, uniq } from "./parse";
 import type { ConnectorQuery, NormalizedNotice, NoticeKind, TenderConnector } from "./types";
 
 /**
  * Connecteur TED — API Search v3 (accès anonyme, données réutilisables).
  * https://docs.ted.europa.eu/api/latest/search.html
  */
+
+export { cpvToPattern };
 
 export const TED_FIELDS = [
   "publication-number",
@@ -42,13 +44,6 @@ const PAGE_SIZE = 100;
 
 function ymd(d: Date): string {
   return d.toISOString().slice(0, 10).replace(/-/g, "");
-}
-
-/** `72200000` → `722*` (préfixe significatif), pour inclure les sous-codes CPV. */
-export function cpvToPattern(code: string): string {
-  const digits = code.replace(/\D/g, "").slice(0, 8);
-  const trimmed = digits.replace(/0+$/, "");
-  return `${trimmed.length >= 2 ? trimmed : digits.slice(0, 2)}*`;
 }
 
 export function buildTedQuery(q: ConnectorQuery): string {

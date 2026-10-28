@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Badge, Card, EmptyState, PageHeader, Table, Td, Th } from "@/components/ui/primitives";
+import { parseSort, SortTh, sortRows } from "@/components/sortable";
+import { Badge, Card, EmptyState, PageHeader, Table, Td } from "@/components/ui/primitives";
 import { formatDateTime } from "@/lib/utils";
 import { requireContext } from "@/server/auth/context";
 import { prisma } from "@/server/db";
@@ -8,12 +9,23 @@ export const metadata = { title: "Mémoires techniques" };
 
 const STATUS = { DRAFT: "Brouillon", GENERATING: "Génération", IN_REVIEW: "En relecture", VALIDATED: "Validé" } as const;
 
-export default async function ProposalsPage() {
+const SORT_KEYS = ["title", "progress", "status", "updated"] as const;
+const STATUS_ORDER = Object.keys(STATUS);
+
+export default async function ProposalsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const ctx = await requireContext();
-  const proposals = await prisma.proposal.findMany({
+  const sp = await searchParams;
+  const sort = parseSort(sp, SORT_KEYS, { key: "updated", dir: "desc" });
+  const rows = await prisma.proposal.findMany({
     where: { organizationId: ctx.orgId },
     orderBy: { updatedAt: "desc" },
     include: { tender: { select: { id: true, title: true, deadlineAt: true } }, sections: { select: { status: true } } },
+  });
+  const proposals = sortRows(rows, sort, {
+    title: (p) => p.tender.title,
+    progress: (p) => (p.sections.length ? p.sections.filter((s) => s.status === "VALIDATED").length / p.sections.length : null),
+    status: (p) => STATUS_ORDER.indexOf(p.status),
+    updated: (p) => p.updatedAt,
   });
   return (
     <>
@@ -23,7 +35,14 @@ export default async function ProposalsPage() {
       ) : (
         <Card>
           <Table>
-            <thead className="border-b"><tr><Th>Mémoire</Th><Th>Avancement</Th><Th>Statut</Th><Th>Mis à jour</Th></tr></thead>
+            <thead className="border-b">
+              <tr>
+                <SortTh label="Mémoire" column="title" sort={sort} params={sp} />
+                <SortTh label="Avancement" column="progress" sort={sort} params={sp} firstDir="desc" />
+                <SortTh label="Statut" column="status" sort={sort} params={sp} />
+                <SortTh label="Mis à jour" column="updated" sort={sort} params={sp} firstDir="desc" />
+              </tr>
+            </thead>
             <tbody className="divide-y">
               {proposals.map((p) => {
                 const done = p.sections.filter((s) => s.status === "VALIDATED").length;

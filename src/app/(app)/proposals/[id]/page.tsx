@@ -4,6 +4,7 @@ import { CheckCircle2, Download, History, Sparkles } from "lucide-react";
 import { AutoRefresh } from "@/components/client-utils";
 import { ActionForm, SubmitButton } from "@/components/form";
 import { Markdown } from "@/components/markdown";
+import { parseSort, SortTh, sortRows } from "@/components/sortable";
 import { buttonVariants } from "@/components/ui/button";
 import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, PageHeader, Select, Table, Td, Th } from "@/components/ui/primitives";
 import { fr } from "@/i18n/fr";
@@ -22,8 +23,19 @@ import { SectionEditor } from "./section-editor";
 
 const TONE = { PENDING: "neutral", GENERATING: "primary", AI_DRAFT: "warning", EDITED: "primary", VALIDATED: "success", FAILED: "danger" } as const;
 
-export default async function ProposalPage({ params }: { params: Promise<{ id: string }> }) {
+const COMPLIANCE_SORT = ["order", "requirement", "status", "source"] as const;
+const COMPLIANCE_STATUS_ORDER = Object.keys(fr.complianceStatus);
+
+export default async function ProposalPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { id } = await params;
+  const sp = await searchParams;
+  const complianceSort = parseSort(sp, COMPLIANCE_SORT, { key: "order", dir: "asc" });
   const ctx = await requireContext();
   const proposal = await prisma.proposal.findFirst({
     where: { id, organizationId: ctx.orgId },
@@ -210,9 +222,23 @@ export default async function ProposalPage({ params }: { params: Promise<{ id: s
             </CardHeader>
             <CardContent>
               <Table>
-                <thead className="border-b"><tr><Th>Exigence</Th><Th>Réponse proposée</Th><Th>Justificatif</Th><Th>Statut</Th><Th>Source</Th><Th /></tr></thead>
+                <thead className="border-b">
+                  <tr>
+                    <SortTh label="Exigence" column="requirement" sort={complianceSort} params={sp} />
+                    <Th>Réponse proposée</Th>
+                    <Th>Justificatif</Th>
+                    <SortTh label="Statut" column="status" sort={complianceSort} params={sp} />
+                    <SortTh label="Source" column="source" sort={complianceSort} params={sp} />
+                    <Th />
+                  </tr>
+                </thead>
                 <tbody className="divide-y">
-                  {proposal.compliance.map((c) => (
+                  {sortRows(proposal.compliance, complianceSort, {
+                    order: (c) => c.order,
+                    requirement: (c) => c.requirement,
+                    status: (c) => COMPLIANCE_STATUS_ORDER.indexOf(c.status),
+                    source: (c) => c.source,
+                  }).map((c) => (
                     <tr key={c.id} className="align-top">
                       <Td className="max-w-xs">
                         {c.requirement}

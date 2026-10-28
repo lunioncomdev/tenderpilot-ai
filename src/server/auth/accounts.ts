@@ -29,7 +29,7 @@ export async function createOrganizationWithOwner(input: {
     await tx.sourceConfig.createMany({
       data: [
         { organizationId: org.id, source: "BOAMP", enabled: true, settings: { daysBack: 14 } },
-        { organizationId: org.id, source: "TED", enabled: true, settings: { daysBack: 14 } },
+        { organizationId: org.id, source: "APPROCH", enabled: true, settings: {} },
       ],
     });
     return { org, user };

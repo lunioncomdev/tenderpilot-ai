@@ -36,6 +36,9 @@ const EnvSchema = z.object({
     .string()
     .default("https://boamp-datadila.opendatasoft.com/api/explore/v2.1/catalog/datasets/boamp"),
   TED_BASE_URL: z.string().default("https://api.ted.europa.eu/v3"),
+  APPROCH_BASE_URL: z
+    .string()
+    .default("https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/projets-dachats-publics"),
   LOG_LEVEL: z.enum(["silent", "fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
 });
 

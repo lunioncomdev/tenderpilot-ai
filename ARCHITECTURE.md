@@ -12,7 +12,7 @@
                 │              │  enqueue (BullMQ)                                │
                 │              ▼                                                  │
                 │            redis ◄──── worker (Node.js, tsx)                    │
-                │              │          ├─ sync-source   (BOAMP, TED)           │
+                │              │          ├─ sync-source   (BOAMP, APProch)       │
                 │              │          ├─ extract-document (PDF/DOCX/XLSX/ZIP) │
                 │              │          ├─ analyze-tender  (Claude)             │
                 │              │          ├─ generate-proposal (Claude)           │
@@ -40,7 +40,7 @@ src/app/(app)/                pages authentifiées (dashboard, tenders, pipeline
 src/app/api/v1/               API REST (upload, download, health)
 src/components/ui/            composants style shadcn/ui (copiés, sans CLI)
 src/server/auth/              sessions, hash, RBAC, garde tenant
-src/server/connectors/        BOAMP, TED, registre, normalisation, dédup
+src/server/connectors/        BOAMP, APProch, TED (désactivé), registre, normalisation, dédup
 src/server/documents/         stockage, extraction, chunking, détection de type
 src/server/ai/                abstraction LLM, provider Anthropic, prompts versionnés
 src/server/analysis/          analyse DCE, vérification des citations
@@ -85,10 +85,11 @@ interface TenderConnector {
 | Source | Accès | Pagination | Remarques |
 |---|---|---|---|
 | **BOAMP** | API Opendatasoft v2.1 de la DILA (`boamp-datadila.opendatasoft.com`), Licence Ouverte, sans clé | `limit`/`offset` (≤ 10 000) par fenêtres de dates | Filtre ODSQL : date de parution, nature (`APPEL_OFFRE`, `RECTIFICATIF`, `ANNULATION`, `ATTRIBUTION`), descripteurs informatiques + mots-clés sur `objet`. |
-| **TED** | API Search v3 (`api.ted.europa.eu/v3/notices/search`), anonyme | mode `ITERATION` (`iterationNextToken`) | Requête expert : CPV, date, pays, types d'avis. |
+| **APProch** | Jeu « Projets d'achats publics » (Opendatasoft `data.economie.gouv.fr`), Licence Ouverte, sans clé | `limit`/`offset` | Projets annoncés avant consultation. Instantané sans date de mise à jour : relu en entier à chaque synchro (filtre CPV + mots-clés sur `libelle`, publication prévue ≥ J-90). Nom de l'acheteur résolu depuis le SIREN via l'API Recherche d'entreprises. |
+| **TED** | API Search v3 (`api.ted.europa.eu/v3/notices/search`), anonyme | mode `ITERATION` (`iterationNextToken`) | **Désactivé** (seuls les marchés français sont suivis) ; connecteur conservé. |
 | PLACE, e-Procurement BE | Non implémentés (P2) | — | PLACE n'expose pas d'API publique documentée : pas de scraping, pas de contournement. Les avis PLACE ≥ seuils apparaissent de toute façon au BOAMP/TED. |
 
-* **Débit** : limiteur séquentiel (1 req/s BOAMP, 1 req/s TED) + retry exponentiel
+* **Débit** : limiteur séquentiel (1 req/s BOAMP, 1 req/s APProch, 5 req/s Recherche d'entreprises) + retry exponentiel
   sur 429/5xx, respect de `Retry-After`.
 * **Identifiant officiel** conservé (`idweb` BOAMP, `publication-number` TED) et clé
   unique `(organizationId, source, externalId)` → upsert idempotent.

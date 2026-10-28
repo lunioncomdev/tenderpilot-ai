@@ -6,7 +6,8 @@ export type JobMap = {
   "sync-source": { orgId: string; source: SourceKey; trigger: "manual" | "cron" };
   "sync-all": Record<string, never>;
   "process-document": { orgId: string; documentId: string };
-  "import-notice-pdf": { orgId: string; tenderId: string; userId: string };
+  /** `analyze` : enchaîne l'analyse IA une fois l'extrait importé (avis reçus par synchronisation). */
+  "import-notice-pdf": { orgId: string; tenderId: string; userId: string | null; analyze?: boolean };
   "analyze-tender": { orgId: string; analysisId: string };
   "generate-section": { orgId: string; sectionId: string; instruction?: string };
   "generate-compliance": { orgId: string; proposalId: string; overwrite: boolean };

@@ -1,29 +1,29 @@
-/** Codes CPV par défaut (services informatiques / développement logiciel). */
+/** Codes CPV par défaut (développement web et applicatif). */
 export const DEFAULT_CPV_CODES = [
-  "72000000", // Services de technologies de l'information
-  "72200000", // Programmation de logiciels et services de conseil
-  "72210000", // Programmation de progiciels
   "72212000", // Programmation de logiciels d'application
+  "72230000", // Développement de logiciels personnalisés
   "72262000", // Développement de logiciels
-  "72267000", // Maintenance et réparation de logiciels
   "72413000", // Conception de sites WWW
+  "72420000", // Développement d'Internet
+  "72421000", // Développement d'applications clients Internet ou intranet
+  "72422000", // Développement d'applications serveur Internet ou intranet
 ];
 
 export const DEFAULT_KEYWORDS = [
-  "développement application web",
-  "développement logiciel",
-  "application métier",
-  "plateforme SaaS",
-  "refonte applicative",
-  "intelligence artificielle",
-  "automatisation",
+  "site internet",
+  "site web",
+  "application web",
+  "application mobile",
+  "plateforme web",
+  "plateforme numérique",
+  "portail",
+  "intranet",
+  "extranet",
+  "développement web",
+  "développement d'application",
+  "refonte",
   "chatbot",
   "API",
-  "maintenance applicative",
-  "TMA",
-  "portail web",
-  "digitalisation",
-  "transformation numérique",
 ];
 
 /** Descripteurs BOAMP correspondant aux prestations informatiques logicielles. */

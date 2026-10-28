@@ -2,16 +2,18 @@ import type { Prisma } from "@prisma/client";
 import { audit } from "../audit";
 import { prisma } from "../db";
 import { env } from "../env";
-import { assertAiAllowed, callStructured } from "../ai/gateway";
+import { AiNotAllowedError, assertAiAllowed, callStructured } from "../ai/gateway";
 import { ANALYZE_TENDER_PROMPT_VERSION, ANALYZE_TENDER_SYSTEM, analyzeTenderPrompt } from "../ai/prompts/analyze-tender";
 import { NotFoundError } from "../auth/rbac";
+import { logger } from "../logger";
+import { computePreScore } from "../scoring/prescore";
 import { computeAndStoreScore } from "../scoring/score-service";
 import { verifyAllSources } from "./citations";
 import { buildDceContext } from "./context";
-import { ANALYSIS_PARTS, TenderAnalysisSchema } from "./schema";
+import { ANALYSIS_PARTS, TenderAnalysisSchema, type TenderAnalysisResult } from "./schema";
 
 /** Crée une demande d'analyse (le traitement est fait par le worker). */
-export async function requestAnalysis(orgId: string, tenderId: string, userId: string) {
+export async function requestAnalysis(orgId: string, tenderId: string, userId: string | null) {
   const tender = await prisma.tender.findFirst({
     where: { id: tenderId, organizationId: orgId },
     include: { documents: { where: { status: "EXTRACTED" }, select: { id: true } } },
@@ -28,6 +30,48 @@ export async function requestAnalysis(orgId: string, tenderId: string, userId: s
   });
   await audit({ orgId, userId, action: "analysis.requested", entityType: "Tender", entityId: tenderId });
   return { analysis, alreadyRunning: false };
+}
+
+/**
+ * Analyse lancée automatiquement après l'import de l'extrait de l'avis. IA
+ * désactivée, consentement absent ou quota atteint : on n'analyse pas, sans
+ * erreur (l'analyse reste possible à la main).
+ */
+export async function requestAutoAnalysis(orgId: string, tenderId: string) {
+  try {
+    const { analysis, alreadyRunning } = await requestAnalysis(orgId, tenderId, null);
+    return { analysis: alreadyRunning ? null : analysis, skipped: alreadyRunning ? "analyse déjà en cours" : null };
+  } catch (err) {
+    if (!(err instanceof AiNotAllowedError)) throw err;
+    logger.info({ orgId, tenderId, reason: err.message }, "analyse automatique non lancée");
+    return { analysis: null, skipped: err.message };
+  }
+}
+
+/**
+ * Complète les métadonnées absentes de l'avis avec celles extraites du DCE
+ * (sans écraser les données officielles), puis recalcule le pré-score.
+ */
+async function enrichFromAnalysis(orgId: string, tenderId: string, result: TenderAnalysisResult) {
+  const [tender, profile] = await Promise.all([
+    prisma.tender.findFirstOrThrow({ where: { id: tenderId, organizationId: orgId } }),
+    prisma.companyProfile.findUnique({ where: { organizationId: orgId } }),
+  ]);
+  const deadline = result.deadlineIso ? new Date(result.deadlineIso) : null;
+  const estimatedValue =
+    tender.estimatedValue === null && result.budgetAmountEur !== null && result.budgetAmountEur > 0 ? result.budgetAmountEur : null;
+  const deadlineAt = !tender.deadlineAt && deadline && !Number.isNaN(deadline.getTime()) ? deadline : null;
+  const allowsConsortium = tender.allowsConsortium === null ? result.consortiumAllowed : null;
+  const merged = { ...tender, estimatedValue: estimatedValue ?? tender.estimatedValue, deadlineAt: deadlineAt ?? tender.deadlineAt };
+  await prisma.tender.update({
+    where: { id: tender.id },
+    data: {
+      ...(estimatedValue !== null ? { estimatedValue, currency: "EUR" } : {}),
+      ...(deadlineAt ? { deadlineAt } : {}),
+      ...(allowsConsortium !== null ? { allowsConsortium } : {}),
+      preScore: computePreScore(merged, profile).total,
+    },
+  });
 }
 
 /** Exécute l'analyse (worker). */
@@ -94,6 +138,7 @@ Passe ${i + 1}/${ANALYSIS_PARTS.length} : concentre-toi sur ${part.focus}. Ne re
         finishedAt: new Date(),
       },
     });
+    await enrichFromAnalysis(orgId, tender.id, res.data);
     await computeAndStoreScore(orgId, tender.id, done.id);
     if (tender.status === "DETECTED" || tender.status === "TO_ANALYZE") {
       await prisma.tender.update({ where: { id: tender.id }, data: { status: "QUALIFIED" } });

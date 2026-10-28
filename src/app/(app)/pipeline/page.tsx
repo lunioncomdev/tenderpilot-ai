@@ -1,68 +1,196 @@
 import Link from "next/link";
-import { DeadlineBadge, RecommendationBadge, ScorePill } from "@/components/badges";
-import { Card, PageHeader } from "@/components/ui/primitives";
-import { fr, PIPELINE_ORDER } from "@/i18n/fr";
+import type { TenderStatus } from "@prisma/client";
+import { DeadlineBadge, RecommendationBadge, ScorePill, StatusBadge } from "@/components/badges";
+import { parseSort, SortTh, sortRows } from "@/components/sortable";
+import { Card, EmptyState, PageHeader, Table, Td } from "@/components/ui/primitives";
+import { PIPELINE_ORDER } from "@/i18n/fr";
+import { cn, formatDate, formatEur } from "@/lib/utils";
 import { requireContext } from "@/server/auth/context";
 import { prisma } from "@/server/db";
 
 export const metadata = { title: "Mes candidatures" };
 
-export default async function PipelinePage({ searchParams }: { searchParams: Promise<{ mine?: string }> }) {
+const TABS = {
+  "en-cours": { label: "En cours", statuses: ["IN_PREPARATION", "IN_VALIDATION", "READY_TO_SUBMIT"] },
+  qualifier: { label: "À qualifier", statuses: ["TO_ANALYZE", "QUALIFIED", "GO"] },
+  deposees: { label: "Déposées", statuses: ["SUBMITTED", "AWAITING_DECISION"] },
+  terminees: { label: "Terminées", statuses: ["WON", "LOST"] },
+} satisfies Record<string, { label: string; statuses: TenderStatus[] }>;
+
+type TabKey = keyof typeof TABS;
+const TAB_ORDER: TabKey[] = ["en-cours", "qualifier", "deposees", "terminees"];
+
+const SORT_KEYS = ["deadline", "title", "status", "score", "memoire", "conformite", "value", "assignee"] as const;
+
+export default async function PipelinePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const ctx = await requireContext();
-  const { mine } = await searchParams;
-  const tenders = await prisma.tender.findMany({
-    where: { organizationId: ctx.orgId, status: { not: "DETECTED" }, ...(mine ? { assigneeId: ctx.userId } : {}) },
-    orderBy: [{ deadlineAt: { sort: "asc", nulls: "last" } }],
-    take: 500,
-    select: {
-      id: true, title: true, buyerName: true, deadlineAt: true, status: true, preScore: true,
-      assignee: { select: { name: true } },
-      scores: { orderBy: { createdAt: "desc" }, take: 1, select: { total: true, recommendation: true } },
-    },
+  const sp = await searchParams;
+  const rawTab = typeof sp.tab === "string" ? sp.tab : undefined;
+  const mine = typeof sp.mine === "string" ? sp.mine : undefined;
+  const tab: TabKey = rawTab && rawTab in TABS ? (rawTab as TabKey) : "en-cours";
+  // Les candidatures terminées se lisent de la plus récente à la plus ancienne.
+  const sort = parseSort(sp, SORT_KEYS, { key: "deadline", dir: tab === "terminees" ? "desc" : "asc" });
+  const base = { organizationId: ctx.orgId, ...(mine ? { assigneeId: ctx.userId } : {}) };
+
+  const [counts, rows] = await Promise.all([
+    prisma.tender.groupBy({ by: ["status"], where: base, _count: { _all: true } }),
+    prisma.tender.findMany({
+      where: { ...base, status: { in: TABS[tab].statuses } },
+      orderBy: [{ deadlineAt: { sort: "asc", nulls: "last" } }],
+      take: 500,
+      select: {
+        id: true, title: true, buyerName: true, deadlineAt: true, status: true, preScore: true,
+        estimatedValue: true, currency: true,
+        assignee: { select: { name: true } },
+        scores: { orderBy: { createdAt: "desc" }, take: 1, select: { total: true, recommendation: true } },
+        proposals: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { sections: { select: { status: true } }, compliance: { select: { status: true } } },
+        },
+      },
+    }),
+  ]);
+  const ratio = (items: Array<{ status: string }> | undefined, ok: string) =>
+    items?.length ? items.filter((i) => i.status === ok).length / items.length : null;
+  const tenders = sortRows(rows, sort, {
+    deadline: (t) => t.deadlineAt,
+    title: (t) => t.title,
+    status: (t) => PIPELINE_ORDER.indexOf(t.status),
+    score: (t) => t.scores[0]?.total ?? t.preScore,
+    memoire: (t) => ratio(t.proposals[0]?.sections, "VALIDATED"),
+    conformite: (t) => ratio(t.proposals[0]?.compliance, "COMPLIANT"),
+    value: (t) => (t.estimatedValue === null ? null : Number(t.estimatedValue)),
+    assignee: (t) => t.assignee?.name,
   });
-  const columns = PIPELINE_ORDER.filter((s) => s !== "DETECTED");
+  const countOf = (k: TabKey) =>
+    counts.filter((c) => (TABS[k].statuses as TenderStatus[]).includes(c.status)).reduce((n, c) => n + c._count._all, 0);
+  const href = (t: TabKey, m = mine) => `/pipeline?${new URLSearchParams({ tab: t, ...(m ? { mine: "1" } : {}) })}`;
+  const toggleMine = (m?: string) =>
+    `/pipeline?${new URLSearchParams({ tab, ...(m ? { mine: "1" } : {}), ...(sp.sort ? { sort: sort.key, dir: sort.dir } : {}) })}`;
 
   return (
     <>
       <PageHeader
         title="Mes candidatures"
-        description="Changez le statut depuis la fiche de chaque appel d'offres. Les avis simplement détectés restent dans « Explorer »."
+        description="Candidatures triées par date limite. Changez le statut depuis la fiche de chaque appel d'offres ; les avis simplement détectés restent dans « Explorer »."
         actions={
           <div className="flex gap-2 text-sm">
-            <Link href="/pipeline" className={!mine ? "font-semibold text-primary" : "text-muted-foreground hover:underline"}>Tous</Link>
+            <Link href={toggleMine()} className={!mine ? "font-semibold text-primary" : "text-muted-foreground hover:underline"}>Tous</Link>
             <span className="text-muted-foreground">·</span>
-            <Link href="/pipeline?mine=1" className={mine ? "font-semibold text-primary" : "text-muted-foreground hover:underline"}>Affectés à moi</Link>
+            <Link href={toggleMine("1")} className={mine ? "font-semibold text-primary" : "text-muted-foreground hover:underline"}>Affectés à moi</Link>
           </div>
         }
       />
-      <div className="flex gap-4 overflow-x-auto pb-4">
-        {columns.map((status) => {
-          const items = tenders.filter((t) => t.status === status);
-          return (
-            <section key={status} className="flex w-72 shrink-0 flex-col gap-2" aria-label={fr.tenderStatus[status]}>
-              <h2 className="flex items-center justify-between px-1 text-sm font-semibold">
-                {fr.tenderStatus[status]} <span className="rounded-full bg-muted px-2 text-xs text-muted-foreground">{items.length}</span>
-              </h2>
-              <div className="flex min-h-24 flex-col gap-2 rounded-xl bg-muted/50 p-2">
-                {items.map((t) => (
-                  <Link key={t.id} href={`/tenders/${t.id}`}>
-                    <Card className="p-3 transition-shadow hover:shadow-md">
-                      <p className="line-clamp-3 text-sm font-medium">{t.title}</p>
-                      <p className="mt-1 truncate text-xs text-muted-foreground">{t.buyerName}</p>
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <ScorePill score={t.scores[0]?.total ?? t.preScore} />
-                        {t.scores[0] && <RecommendationBadge value={t.scores[0].recommendation} />}
-                        <DeadlineBadge deadline={t.deadlineAt} />
+
+      <nav className="mb-4 flex flex-wrap gap-1 border-b" aria-label="Étapes">
+        {TAB_ORDER.map((k) => (
+          <Link
+            key={k}
+            href={href(k)}
+            aria-current={k === tab ? "page" : undefined}
+            className={cn(
+              "-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm",
+              k === tab ? "border-primary font-semibold text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {TABS[k].label}
+            <span className="rounded-full bg-muted px-2 text-xs text-muted-foreground">{countOf(k)}</span>
+          </Link>
+        ))}
+      </nav>
+
+      {tenders.length === 0 ? (
+        <EmptyState title="Aucune candidature à cette étape">
+          {tab === "en-cours"
+            ? "Passez un appel d'offres « En préparation » depuis sa fiche pour le suivre ici."
+            : <>Les appels d&apos;offres se trouvent dans <Link className="text-primary underline" href="/tenders">Explorer</Link>.</>}
+        </EmptyState>
+      ) : (
+        <Card>
+          <Table>
+            <thead className="border-b">
+              <tr>
+                <SortTh label="Échéance" column="deadline" sort={sort} params={sp} />
+                <SortTh label="Consultation" column="title" sort={sort} params={sp} />
+                <SortTh label="Statut" column="status" sort={sort} params={sp} />
+                {tab === "qualifier" ? (
+                  <SortTh label="Score" column="score" sort={sort} params={sp} firstDir="desc" />
+                ) : tab === "en-cours" ? (
+                  <>
+                    <SortTh label="Mémoire" column="memoire" sort={sort} params={sp} firstDir="desc" />
+                    <SortTh label="Conformité" column="conformite" sort={sort} params={sp} firstDir="desc" />
+                  </>
+                ) : (
+                  <SortTh label="Montant" column="value" sort={sort} params={sp} firstDir="desc" />
+                )}
+                <SortTh label="Responsable" column="assignee" sort={sort} params={sp} />
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {tenders.map((t) => {
+                const proposal = t.proposals[0];
+                const score = t.scores[0];
+                return (
+                  <tr key={t.id} className="hover:bg-muted/50">
+                    <Td className="whitespace-nowrap">
+                      <div className="flex flex-col items-start gap-0.5">
+                        {tab === "en-cours" || tab === "qualifier" ? <DeadlineBadge deadline={t.deadlineAt} /> : null}
+                        <span className="text-xs text-muted-foreground">{formatDate(t.deadlineAt)}</span>
                       </div>
-                      {t.assignee && <p className="mt-2 text-xs text-muted-foreground">Responsable : {t.assignee.name}</p>}
-                    </Card>
-                  </Link>
-                ))}
-              </div>
-            </section>
-          );
-        })}
-      </div>
+                    </Td>
+                    <Td className="max-w-xl">
+                      <Link href={`/tenders/${t.id}`} className="font-medium hover:text-primary hover:underline">{t.title}</Link>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{t.buyerName || "Acheteur non précisé"}</p>
+                    </Td>
+                    <Td><StatusBadge status={t.status} /></Td>
+                    {tab === "qualifier" ? (
+                      <Td>
+                        <div className="flex flex-col items-start gap-1">
+                          <ScorePill score={score?.total ?? t.preScore} label={score ? "Score complet" : "Pré-score"} />
+                          {score && <RecommendationBadge value={score.recommendation} />}
+                        </div>
+                      </Td>
+                    ) : tab === "en-cours" ? (
+                      <>
+                        <Td>
+                          {proposal?.sections.length ? (
+                            <Progress done={proposal.sections.filter((s) => s.status === "VALIDATED").length} total={proposal.sections.length} unit="validées" />
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Pas de mémoire</span>
+                          )}
+                        </Td>
+                        <Td>
+                          {proposal?.compliance.length ? (
+                            <Progress done={proposal.compliance.filter((c) => c.status === "COMPLIANT").length} total={proposal.compliance.length} unit="conformes" />
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </Td>
+                      </>
+                    ) : (
+                      <Td className="whitespace-nowrap tabular-nums">{formatEur(t.estimatedValue?.toString(), t.currency)}</Td>
+                    )}
+                    <Td className="whitespace-nowrap text-sm">{t.assignee?.name ?? <span className="text-muted-foreground">—</span>}</Td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        </Card>
+      )}
     </>
+  );
+}
+
+function Progress({ done, total, unit }: { done: number; total: number; unit: string }) {
+  const pct = Math.round((done / total) * 100);
+  return (
+    <div className="flex min-w-32 flex-col gap-1" title={`${done} / ${total} ${unit}`}>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <div className={cn("h-full rounded-full", pct === 100 ? "bg-success" : "bg-primary")} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs tabular-nums text-muted-foreground">{done}/{total} {unit}</span>
+    </div>
   );
 }

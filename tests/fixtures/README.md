@@ -8,6 +8,7 @@ l'application) :
 |---|---|---|
 | `boamp-records.json` | API Explore v2.1 BOAMP (DILA) | `where=idweb IN ("26-103042","26-101861","26-103266")` |
 | `ted-search.json` | API Search v3 TED | CPV 72*, acheteurs FRA, publiés depuis le 20/10/2026, 3 résultats |
+| `approch-records.json` | Projets d'achats publics (data.economie.gouv.fr), capturé le 28/10/2026 | `where=code IN (46222, 20073) or (code_s_cpv like "72*" and …)`, 3 résultats |
 
 Les documents DCE de test (`dce-*`) sont générés par les tests eux-mêmes et sont
 fictifs, explicitement marqués comme tels.

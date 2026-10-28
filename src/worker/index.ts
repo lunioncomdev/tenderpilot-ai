@@ -3,7 +3,7 @@ import { prisma } from "@/server/db";
 import { env } from "@/server/env";
 import { logger } from "@/server/logger";
 import { redis } from "@/server/redis";
-import { runAnalysis } from "@/server/analysis/analysis-service";
+import { requestAutoAnalysis, runAnalysis } from "@/server/analysis/analysis-service";
 import { ALL_SOURCES } from "@/server/connectors/registry";
 import { importBoampNoticePdf } from "@/server/documents/boamp-notice";
 import { processDocument } from "@/server/documents/document-service";
@@ -19,10 +19,10 @@ async function handle(job: Job) {
   switch (name) {
     case "sync-source": {
       const d = job.data as JobMap["sync-source"];
-      return runSync(d.orgId, d.source, { trigger: d.trigger });
+      return runSync(d.orgId, d.source, { trigger: d.trigger, autoImportNotices: true });
     }
     case "sync-all": {
-      const configs = await prisma.sourceConfig.findMany({ where: { enabled: true } });
+      const configs = await prisma.sourceConfig.findMany({ where: { enabled: true, source: { in: ALL_SOURCES } } });
       for (const c of configs) await enqueue("sync-source", { orgId: c.organizationId, source: c.source, trigger: "cron" });
       return { enqueued: configs.length };
     }
@@ -32,7 +32,13 @@ async function handle(job: Job) {
     }
     case "import-notice-pdf": {
       const d = job.data as JobMap["import-notice-pdf"];
-      return importBoampNoticePdf(d.orgId, d.tenderId, d.userId);
+      const imported = await importBoampNoticePdf(d.orgId, d.tenderId, d.userId);
+      if (!d.analyze || imported.duplicate) return imported;
+      const auto = await requestAutoAnalysis(d.orgId, d.tenderId);
+      if (auto.analysis) {
+        await enqueue("analyze-tender", { orgId: d.orgId, analysisId: auto.analysis.id }, { jobId: `analysis-${auto.analysis.id}`, attempts: 2 });
+      }
+      return { ...imported, analysis: auto };
     }
     case "analyze-tender": {
       const d = job.data as JobMap["analyze-tender"];

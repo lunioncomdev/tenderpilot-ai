@@ -3,7 +3,7 @@
 Plateforme de veille, de qualification et de préparation des réponses aux appels
 d'offres informatiques (première organisation : Lunioncom).
 
-- Veille **BOAMP** et **TED** via leurs API officielles ouvertes, dédoublonnage
+- Veille **BOAMP** et **APProch** (projets d'achats publics) via leurs API officielles ouvertes, dédoublonnage
   inter-sources, prise en compte des rectificatifs, annulations et attributions.
 - Recherche plein texte (PostgreSQL, français) et filtres, recherches sauvegardées.
 - Import manuel des DCE (PDF, DOCX, XLSX, TXT, ZIP) avec extraction, découpage et
@@ -50,7 +50,7 @@ Sans Docker : `pnpm db:dev` démarre un PostgreSQL embarqué (données dans
 `.data/postgres`, sans pgvector) sur le port de `DATABASE_URL` ; un Redis ≥ 5
 local suffit (6.2+ recommandé). Mettre `STORAGE_DRIVER=local`.
 
-Synchronisation immédiate sans file de tâches : `pnpm sync` (ou `pnpm sync TED`).
+Synchronisation immédiate sans file de tâches : `pnpm sync` (ou `pnpm sync APPROCH`).
 
 ## Activer l'IA
 

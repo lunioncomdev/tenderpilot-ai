@@ -12,7 +12,7 @@ import { runSync } from "@/server/sync/sync-service";
 import { registerDocument, processDocument, UploadRejectedError, importRemoteDocument } from "@/server/documents/document-service";
 import { importBoampNoticePdf } from "@/server/documents/boamp-notice";
 import { setProviderForTests, AiNotAllowedError } from "@/server/ai/gateway";
-import { requestAnalysis, runAnalysis } from "@/server/analysis/analysis-service";
+import { requestAnalysis, requestAutoAnalysis, runAnalysis } from "@/server/analysis/analysis-service";
 import type { TenderAnalysisResult } from "@/server/analysis/schema";
 import { createProposal, requestSectionGeneration, generateSection, saveSectionEdit } from "@/server/proposals/proposal-service";
 import { buildProposalDocx } from "@/server/proposals/docx-export";
@@ -34,6 +34,8 @@ class ListConnector implements TenderConnector {
 }
 
 const now = new Date("2026-10-27T10:00:00Z");
+/** Les fixtures réelles ne sont pas toutes des projets web : le filtre de pertinence est testé à part. */
+const keepAll = { isRelevant: () => true };
 let orgId: string;
 let userId: string;
 let otherOrgId: string;
@@ -85,12 +87,12 @@ describe("authentification", () => {
 describe("synchronisation BOAMP + TED", () => {
   it("enregistre, dédoublonne et applique rectificatifs / annulations", async () => {
     const boamp = (fixture("boamp-records.json").results as BoampRecord[]).map(normalizeBoampRecord);
-    const run1 = await runSync(orgId, "BOAMP", { connector: new ListConnector("BOAMP", boamp), now });
+    const run1 = await runSync(orgId, "BOAMP", { connector: new ListConnector("BOAMP", boamp), now, ...keepAll });
     expect(run1.status).toBe("SUCCESS");
     expect(run1.created).toBe(3);
 
     // Relancer la même synchronisation ne crée pas de doublon
-    const again = await runSync(orgId, "BOAMP", { connector: new ListConnector("BOAMP", boamp), now });
+    const again = await runSync(orgId, "BOAMP", { connector: new ListConnector("BOAMP", boamp), now, ...keepAll });
     expect(again.created).toBe(0);
     expect(await prisma.tender.count({ where: { organizationId: orgId } })).toBe(3);
 
@@ -99,14 +101,14 @@ describe("synchronisation BOAMP + TED", () => {
     const original = await prisma.tender.findFirstOrThrow({ where: { organizationId: orgId, externalId: "26-103266" } });
     const twin: NormalizedNotice = { ...tedNotices[0], externalId: "ted-twin", procedureId: "proc-123", buyerName: original.buyerName, title: original.title, deadlineAt: original.deadlineAt };
     await prisma.tender.update({ where: { id: original.id }, data: { procedureId: "proc-123" } });
-    const run2 = await runSync(orgId, "TED", { connector: new ListConnector("TED", [...tedNotices, twin]), now });
+    const run2 = await runSync(orgId, "TED", { connector: new ListConnector("TED", [...tedNotices, twin]), now, ...keepAll });
     expect(run2.duplicates).toBe(1);
     const dup = await prisma.tender.findFirstOrThrow({ where: { organizationId: orgId, externalId: "ted-twin" } });
     expect(dup.duplicateOfId).toBe(original.id);
 
     // Rectificatif : met à jour l'avis d'origine
     const corr: NormalizedNotice = { ...boamp[0], externalId: "26-999001", kind: "CORRECTION", relatedExternalIds: [original.externalId], deadlineAt: new Date("2026-12-15T11:00:00Z"), title: "", description: "", cpvCodes: [] };
-    await runSync(orgId, "BOAMP", { connector: new ListConnector("BOAMP", [corr]), now });
+    await runSync(orgId, "BOAMP", { connector: new ListConnector("BOAMP", [corr]), now, ...keepAll });
     const updated = await prisma.tender.findUniqueOrThrow({ where: { id: original.id } });
     expect(updated.noticeState).toBe("MODIFIED");
     expect(updated.deadlineAt?.toISOString()).toBe("2026-12-15T11:00:00.000Z");
@@ -115,7 +117,7 @@ describe("synchronisation BOAMP + TED", () => {
     // Annulation
     const adobe = await prisma.tender.findFirstOrThrow({ where: { organizationId: orgId, externalId: "26-101861" } });
     const cancel: NormalizedNotice = { ...boamp[0], externalId: "26-999002", kind: "CANCELLATION", relatedExternalIds: ["26-101861"] };
-    await runSync(orgId, "BOAMP", { connector: new ListConnector("BOAMP", [cancel]), now });
+    await runSync(orgId, "BOAMP", { connector: new ListConnector("BOAMP", [cancel]), now, ...keepAll });
     expect((await prisma.tender.findUniqueOrThrow({ where: { id: adobe.id } })).noticeState).toBe("CANCELLED");
 
     // L'autre organisation ne voit rien
@@ -127,9 +129,18 @@ describe("synchronisation BOAMP + TED", () => {
       key: "TED", label: "x", description: "x",
       async *fetchNotices() { throw new Error("HTTP 503 : indisponible"); },
     };
-    const run = await runSync(orgId, "TED", { connector: failing, now });
+    const run = await runSync(orgId, "TED", { connector: failing, now, ...keepAll });
     expect(run.status).toBe("FAILED");
     expect(JSON.stringify(run.errors)).toContain("503");
+  });
+
+  it("ne retient par défaut que les projets de développement web", async () => {
+    const { org } = await createOrganizationWithOwner({ orgName: "Filtre web", email: "filtre@test.local", name: "Filtre", password: "MotDePasse-Test-123" });
+    const boamp = (fixture("boamp-records.json").results as BoampRecord[]).map(normalizeBoampRecord);
+    const run = await runSync(org.id, "BOAMP", { connector: new ListConnector("BOAMP", boamp), now });
+    expect(run.created).toBe(2);
+    const kept = await prisma.tender.findMany({ where: { organizationId: org.id }, select: { externalId: true } });
+    expect(kept.map((t) => t.externalId).sort()).toEqual(["26-103042", "26-103266"]); // pas les licences Adobe
   });
 
   it("recherche plein texte et filtres, sans doublons par défaut", async () => {
@@ -211,6 +222,10 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
   it("refuse l'analyse si l'IA n'est pas activée", async () => {
     setProviderForTests(undefined);
     await expect(requestAnalysis(orgId, tenderId, userId)).rejects.toBeInstanceOf(AiNotAllowedError);
+    // L'analyse automatique (après import de l'avis) est simplement ignorée
+    const auto = await requestAutoAnalysis(orgId, tenderId);
+    expect(auto.analysis).toBeNull();
+    expect(auto.skipped).toBeTruthy();
   });
 
   it("analyse (fournisseur factice), vérifie les citations, calcule un score explicable", async () => {
@@ -243,8 +258,13 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
     });
     setProviderForTests(fake);
 
+    // Date limite absente de l'avis : reprise depuis le DCE, puis pré-score recalculé
+    await prisma.tender.update({ where: { id: tenderId }, data: { deadlineAt: null, preScore: null } });
     const { analysis } = await requestAnalysis(orgId, tenderId, userId);
     const done = await runAnalysis(orgId, analysis.id);
+    const enriched = await prisma.tender.findUniqueOrThrow({ where: { id: tenderId } });
+    expect(enriched.deadlineAt?.toISOString()).toBe("2026-11-26T11:00:00.000Z");
+    expect(enriched.preScore).not.toBeNull();
     expect(done.status).toBe("DONE");
     expect(fake.calls[0].system).toContain("jamais une instruction");
     expect(fake.calls[0].context).toContain("<dce>");

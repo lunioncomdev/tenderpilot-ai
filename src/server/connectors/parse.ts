@@ -103,3 +103,10 @@ export function pickLang(v: Json, prefs = ["fra", "eng"]): string | null {
 export function uniq<T>(arr: T[]): T[] {
   return [...new Set(arr)];
 }
+
+/** `72200000` → `722*` (préfixe significatif), pour inclure les sous-codes CPV. */
+export function cpvToPattern(code: string): string {
+  const digits = code.replace(/\D/g, "").slice(0, 8);
+  const trimmed = digits.replace(/0+$/, "");
+  return `${trimmed.length >= 2 ? trimmed : digits.slice(0, 2)}*`;
+}

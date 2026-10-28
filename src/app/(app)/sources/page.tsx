@@ -1,6 +1,7 @@
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { ActionForm, SubmitButton } from "@/components/form";
-import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Field, Input, PageHeader, Table, Td, Th } from "@/components/ui/primitives";
+import { parseSort, SortTh, sortRows } from "@/components/sortable";
+import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Field, Input, PageHeader, Table, Td } from "@/components/ui/primitives";
 import { formatDateTime } from "@/lib/utils";
 import { requireContext } from "@/server/auth/context";
 import { hasRole } from "@/server/auth/rbac";
@@ -14,12 +15,28 @@ export const metadata = { title: "Sources et automatisations" };
 const STATUS_TONE = { SUCCESS: "success", PARTIAL: "warning", FAILED: "danger", RUNNING: "primary" } as const;
 const STATUS_LABEL = { SUCCESS: "Réussie", PARTIAL: "Partielle", FAILED: "Échec", RUNNING: "En cours" } as const;
 
-export default async function SourcesPage() {
+const RUN_SORT = ["started", "source", "trigger", "status", "fetched", "created", "updated", "duplicates", "errors"] as const;
+
+export default async function SourcesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const ctx = await requireContext();
-  const [configs, runs] = await Promise.all([
+  const sp = await searchParams;
+  const runSort = parseSort(sp, RUN_SORT, { key: "started", dir: "desc" });
+  const [configs, runRows] = await Promise.all([
     prisma.sourceConfig.findMany({ where: { organizationId: ctx.orgId } }),
     prisma.syncRun.findMany({ where: { organizationId: ctx.orgId }, orderBy: { startedAt: "desc" }, take: 30 }),
   ]);
+  // Tri des 30 dernières synchronisations.
+  const runs = sortRows(runRows, runSort, {
+    started: (r) => r.startedAt,
+    source: (r) => r.source,
+    trigger: (r) => r.trigger,
+    status: (r) => STATUS_LABEL[r.status],
+    fetched: (r) => r.fetched,
+    created: (r) => r.created,
+    updated: (r) => r.updated,
+    duplicates: (r) => r.duplicates,
+    errors: (r) => ((r.errors as unknown[] | null) ?? []).length,
+  });
   const isAdmin = hasRole(ctx.role, "ADMIN");
 
   return (
@@ -90,7 +107,17 @@ export default async function SourcesPage() {
           ) : (
             <Table>
               <thead className="border-b">
-                <tr><Th>Début</Th><Th>Source</Th><Th>Déclencheur</Th><Th>Statut</Th><Th className="text-right">Reçus</Th><Th className="text-right">Créés</Th><Th className="text-right">Mis à jour</Th><Th className="text-right">Doublons</Th><Th>Erreurs</Th></tr>
+                <tr>
+                  <SortTh label="Début" column="started" sort={runSort} params={sp} firstDir="desc" />
+                  <SortTh label="Source" column="source" sort={runSort} params={sp} />
+                  <SortTh label="Déclencheur" column="trigger" sort={runSort} params={sp} />
+                  <SortTh label="Statut" column="status" sort={runSort} params={sp} />
+                  <SortTh label="Reçus" column="fetched" sort={runSort} params={sp} firstDir="desc" className="text-right" />
+                  <SortTh label="Créés" column="created" sort={runSort} params={sp} firstDir="desc" className="text-right" />
+                  <SortTh label="Mis à jour" column="updated" sort={runSort} params={sp} firstDir="desc" className="text-right" />
+                  <SortTh label="Doublons" column="duplicates" sort={runSort} params={sp} firstDir="desc" className="text-right" />
+                  <SortTh label="Erreurs" column="errors" sort={runSort} params={sp} firstDir="desc" />
+                </tr>
               </thead>
               <tbody className="divide-y">
                 {runs.map((r) => {

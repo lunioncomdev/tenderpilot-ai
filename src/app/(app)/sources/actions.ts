@@ -9,7 +9,7 @@ import { requireContext } from "@/server/auth/context";
 import { prisma } from "@/server/db";
 import { enqueue } from "@/server/queue/queues";
 
-const Source = z.enum(["BOAMP", "TED"]);
+const Source = z.enum(["BOAMP", "APPROCH"]);
 
 const SettingsSchema = z.object({
   source: Source,

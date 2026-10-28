@@ -1,14 +1,15 @@
 /**
  * Synchronisation immédiate, sans file de tâches (utile en développement ou en
- * dépannage) : `pnpm sync [BOAMP|TED]`.
+ * dépannage) : `pnpm sync [BOAMP|APPROCH]`.
  */
+import { ALL_SOURCES } from "@/server/connectors/registry";
 import { prisma } from "@/server/db";
 import { runSync } from "@/server/sync/sync-service";
 import type { SourceKey } from "@prisma/client";
 
 async function main() {
   const only = process.argv[2]?.toUpperCase() as SourceKey | undefined;
-  const configs = await prisma.sourceConfig.findMany({ where: { enabled: true, ...(only ? { source: only } : {}) } });
+  const configs = await prisma.sourceConfig.findMany({ where: { enabled: true, source: only ? only : { in: ALL_SOURCES } } });
   if (!configs.length) console.log("Aucune source active.");
   for (const c of configs) {
     console.log(`→ ${c.source} (org ${c.organizationId})…`);

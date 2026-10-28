@@ -2,13 +2,14 @@ import Link from "next/link";
 import { Bookmark, ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { DeadlineBadge, NoticeStateBadge, RecommendationBadge, ScorePill, StatusBadge } from "@/components/badges";
 import { ActionForm, SubmitButton } from "@/components/form";
+import { SortTh } from "@/components/sortable";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Badge, Card, CardContent, EmptyState, Field, Input, PageHeader, Select, Table, Td, Textarea, Th } from "@/components/ui/primitives";
+import { Badge, Card, CardContent, EmptyState, Field, Input, PageHeader, Select, Table, Td, Textarea } from "@/components/ui/primitives";
 import { fr } from "@/i18n/fr";
 import { formatDate, formatEur } from "@/lib/utils";
 import { requireContext } from "@/server/auth/context";
 import { prisma } from "@/server/db";
-import { parseSearchParams, searchTenders } from "@/server/tenders/search";
+import { DEFAULT_DIR, parseSearchParams, searchTenders } from "@/server/tenders/search";
 import { createManualTenderAction, deleteSearchAction, saveSearchAction } from "./actions";
 
 export const metadata = { title: "Explorer les appels d'offres" };
@@ -30,8 +31,10 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
     return `/tenders?${q}`;
   };
   const pages = Math.max(1, Math.ceil(res.total / res.pageSize));
+  const sortKey = filters.sort ?? (filters.q ? "relevance" : "published");
+  const sort = { key: sortKey, dir: filters.dir ?? DEFAULT_DIR[sortKey] };
   const d = (x?: Date) => (x ? x.toISOString().slice(0, 10) : "");
-  const advancedOpen = ["minBudget", "maxBudget", "publishedFrom", "deadlineFrom", "deadlineTo", "minScore", "cpv", "contractType", "procedureType", "maxDurationMonths", "sort", "includeExpired", "includeClosed", "includeDuplicates"].some((k) => !!sp[k]);
+  const advancedOpen = ["minBudget", "maxBudget", "publishedFrom", "deadlineFrom", "deadlineTo", "minScore", "cpv", "contractType", "procedureType", "maxDurationMonths", "includeExpired", "includeClosed", "includeDuplicates"].some((k) => !!sp[k]);
 
   return (
     <>
@@ -70,7 +73,7 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
             <Field label="Département / NUTS"><Input name="region" defaultValue={filters.region ?? ""} placeholder="75, FR10…" /></Field>
             <Field label="Source">
               <Select name="origin" defaultValue={filters.origin ?? ""}>
-                <option value="">Toutes</option><option value="BOAMP">BOAMP</option><option value="TED">TED</option><option value="MANUAL">Manuelle</option>
+                <option value="">Toutes</option><option value="BOAMP">BOAMP</option><option value="APPROCH">APProch (projets)</option><option value="MANUAL">Manuelle</option>
               </Select>
             </Field>
             <Field label="Statut">
@@ -100,7 +103,9 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
               <Select name="sort" defaultValue={filters.sort ?? ""}>
                 <option value="">Par défaut</option><option value="relevance">Pertinence</option><option value="published">Publication</option>
                 <option value="deadline">Date limite</option><option value="score">Pré-score</option><option value="value">Montant</option>
+                <option value="title">Titre</option><option value="status">Statut</option>
               </Select>
+              {filters.dir && <input type="hidden" name="dir" value={filters.dir} />}
                 </Field>
                 <div className="flex flex-col justify-end gap-1 text-sm sm:col-span-2">
               <label className="flex items-center gap-2"><input type="checkbox" name="includeExpired" value="1" defaultChecked={filters.includeExpired} /> Inclure les échéances passées</label>
@@ -142,7 +147,14 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
         <Card>
           <Table>
             <thead className="border-b">
-              <tr><Th>Score</Th><Th>Consultation</Th><Th>Montant</Th><Th>Publication</Th><Th>Échéance</Th><Th>Statut</Th></tr>
+              <tr>
+                <SortTh label="Score" column="score" sort={sort} params={sp} firstDir="desc" />
+                <SortTh label="Consultation" column="title" sort={sort} params={sp} />
+                <SortTh label="Montant" column="value" sort={sort} params={sp} firstDir="desc" />
+                <SortTh label="Publication" column="published" sort={sort} params={sp} firstDir="desc" />
+                <SortTh label="Échéance" column="deadline" sort={sort} params={sp} />
+                <SortTh label="Statut" column="status" sort={sort} params={sp} />
+              </tr>
             </thead>
             <tbody className="divide-y">
               {res.items.map((t) => {

@@ -150,6 +150,7 @@ model CompanyReference {
 enum SourceKey {
   BOAMP
   TED
+  APPROCH
 }
 
 enum SyncStatus {
@@ -215,6 +216,7 @@ enum NoticeState {
 enum TenderOrigin {
   BOAMP
   TED
+  APPROCH
   MANUAL
 }
 
@@ -222,7 +224,7 @@ model Tender {
   id               String       @id @default(cuid())
   organizationId   String
   origin           TenderOrigin
-  externalId       String // idweb BOAMP, notice-identifier TED, uuid manuel
+  externalId       String // idweb BOAMP, notice-identifier TED, code APProch, uuid manuel
   publicationRef   String? // n° de publication officiel affichable
   procedureId      String? // identifiant de procédure eForms (dédoublonnage fort)
   dedupKey         String // empreinte acheteur+objet+date limite (dédoublonnage faible)

@@ -12,7 +12,7 @@ export const SearchFiltersSchema = z.object({
   country: optStr,
   region: optStr,
   cpv: optStr,
-  origin: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["BOAMP", "TED", "MANUAL"]).optional()),
+  origin: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["BOAMP", "TED", "APPROCH", "MANUAL"]).optional()),
   status: z.preprocess((v) => (v === "" ? undefined : v), z.enum([
     "DETECTED", "TO_ANALYZE", "QUALIFIED", "GO", "NO_GO", "IN_PREPARATION", "IN_VALIDATION",
     "READY_TO_SUBMIT", "SUBMITTED", "AWAITING_DECISION", "WON", "LOST",
@@ -29,11 +29,18 @@ export const SearchFiltersSchema = z.object({
   includeExpired: optBool.default(false),
   includeDuplicates: optBool.default(false),
   includeClosed: optBool.default(false),
-  sort: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["relevance", "deadline", "published", "score", "value"]).optional()),
+  sort: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["relevance", "deadline", "published", "score", "value", "title", "status"]).optional()),
+  /** Sens du tri ; par défaut, celui de la colonne (montant et score décroissants, échéance croissante…). */
+  dir: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["asc", "desc"]).optional()),
   page: z.preprocess((v) => (v ? Number(v) : 1), z.number().int().min(1).max(500)).default(1),
 });
 
 export type SearchFilters = Partial<z.input<typeof SearchFiltersSchema>>;
+export type TenderSort = NonNullable<z.infer<typeof SearchFiltersSchema>["sort"]>;
+
+export const DEFAULT_DIR: Record<TenderSort, "asc" | "desc"> = {
+  relevance: "desc", published: "desc", score: "desc", value: "desc", deadline: "asc", title: "asc", status: "asc",
+};
 const PAGE_SIZE = 25;
 
 export function parseSearchParams(sp: Record<string, string | string[] | undefined>) {
@@ -83,14 +90,21 @@ export async function searchTenders(orgId: string, input: SearchFilters, now = n
   where.AND = and;
 
   const sort = f.sort ?? (f.q ? "relevance" : "published");
-  const orderBy: Prisma.TenderOrderByWithRelationInput[] =
+  const dir = f.dir ?? DEFAULT_DIR[sort];
+  const orderBy: Prisma.TenderOrderByWithRelationInput[] = [
     sort === "deadline"
-      ? [{ deadlineAt: { sort: "asc", nulls: "last" } }]
+      ? { deadlineAt: { sort: dir, nulls: "last" } }
       : sort === "score"
-        ? [{ preScore: { sort: "desc", nulls: "last" } }]
+        ? { preScore: { sort: dir, nulls: "last" } }
         : sort === "value"
-          ? [{ estimatedValue: { sort: "desc", nulls: "last" } }]
-          : [{ publishedAt: { sort: "desc", nulls: "last" } }];
+          ? { estimatedValue: { sort: dir, nulls: "last" } }
+          : sort === "title"
+            ? { title: dir }
+            : sort === "status"
+              ? { status: dir }
+              : { publishedAt: { sort: dir, nulls: "last" } },
+    { id: "asc" }, // ordre stable d'une page à l'autre
+  ];
 
   const select = {
     id: true, externalId: true, publicationRef: true, origin: true, title: true, buyerName: true, buyerCountry: true,

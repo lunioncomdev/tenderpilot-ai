@@ -31,7 +31,7 @@ export default async function DashboardPage() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
         <Kpi label="Nouveaux (7 j)" value={n(k.newCount)} href="/tenders?sort=published" />
         <Kpi label="Prioritaires" value={n(k.priority)} hint="pré-score ≥ 80" href="/tenders?minScore=80&sort=score" />
-        <Kpi label="Qualifiés / GO" value={n(k.qualified)} href="/pipeline" />
+        <Kpi label="Qualifiés / GO" value={n(k.qualified)} href="/pipeline?tab=qualifier" />
         <Kpi label="En préparation" value={n(k.preparing)} href="/pipeline" />
         <Kpi label="Montant déposé" value={formatEur(k.submittedValue)} hint="estimations des marchés déposés" />
         <Kpi label="Gagnés / perdus" value={`${k.won} / ${k.lost}`} />

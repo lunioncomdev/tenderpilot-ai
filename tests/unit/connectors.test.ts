@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { ApprochConnector, buildApprochWhere, normalizeApprochRecord, parseAmountRange, type ApprochRecord } from "@/server/connectors/approch";
 import { BoampConnector, boampNoticePdfUrl, buildBoampWhere, normalizeBoampRecord, type BoampRecord } from "@/server/connectors/boamp";
 import { computeDedupKey } from "@/server/connectors/dedup";
 import { ThrottledHttp } from "@/server/connectors/http";
@@ -12,6 +13,7 @@ const fixture = (name: string) =>
 
 const boamp = fixture("boamp-records.json") as { results: BoampRecord[] };
 const ted = fixture("ted-search.json") as { notices: Record<string, unknown>[] };
+const approch = fixture("approch-records.json") as { total_count: number; results: ApprochRecord[] };
 
 describe("BOAMP", () => {
   it("normalise un avis eForms avec date limite et montant", () => {
@@ -133,6 +135,65 @@ describe("TED", () => {
     for await (const n of c.fetchNotices({ since: new Date("2026-10-20"), cpvCodes: ["72000000"], keywords: [], countries: ["FR"] })) out.push(n);
     expect(out).toHaveLength(3);
     expect(call).toBe(2);
+  });
+});
+
+describe("APProch", () => {
+  it("normalise un projet d'achat", () => {
+    const rec = approch.results.find((r) => r.code === 46222)!;
+    const n = normalizeApprochRecord(rec, "MINISTERE DE L'ECONOMIE");
+    expect(n.source).toBe("APPROCH");
+    expect(n.externalId).toBe("46222");
+    expect(n.kind).toBe("TENDER");
+    expect(n.buyerName).toBe("MINISTERE DE L'ECONOMIE");
+    expect(n.buyerCountry).toBe("FR");
+    expect(n.cpvCodes).toEqual(["72253100"]);
+    expect(n.estimatedValue).toBe(300_000);
+    expect(n.contractType).toBe("SERVICES");
+    expect(n.publishedAt).toBeNull();
+    expect(n.noticeType).toBe("Projet d'achat — publication prévue le 05/01/2028");
+    expect(n.noticeUrl).toBe("https://projets-achats.marches-publics.gouv.fr/project/46222");
+    expect(n.region).toBe("75");
+  });
+
+  it("garde la date cible et ignore un lien vers la seule page d'accueil", () => {
+    const n = normalizeApprochRecord(approch.results.find((r) => r.code === 63343)!, null);
+    expect(n.deadlineAt?.toISOString()).toBe("2026-10-30T12:00:00.000Z");
+    expect(n.documentsUrl).toBeNull();
+    expect(n.buyerName).toMatch(/^SIREN \d+$/);
+  });
+
+  it("convertit les fourchettes de montant", () => {
+    expect(parseAmountRange("0 - 40k€")).toBe(20_000);
+    expect(parseAmountRange("1M - 5M€")).toBe(3_000_000);
+    expect(parseAmountRange("+ 100M€")).toBe(100_000_000);
+    expect(parseAmountRange(null)).toBeNull();
+  });
+
+  it("filtre par préfixes CPV et mots-clés échappés", () => {
+    expect(buildApprochWhere(["72000000", "72200000"], ['refonte "web"'], new Date("2026-10-28"))).toBe(
+      'statut = "Ouvert" AND (date_previsionnelle_de_publication IS NULL OR date_previsionnelle_de_publication >= date\'2026-07-30\') AND (code_s_cpv LIKE "72*" OR code_s_cpv LIKE "722*" OR search(libelle, "refonte \\"web\\""))',
+    );
+  });
+
+  it("pagine et résout le nom de l'acheteur une seule fois par SIREN", async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      calls.push(url);
+      if (url.includes("recherche-entreprises")) {
+        const siren = new URL(url).searchParams.get("q");
+        return new Response(JSON.stringify({ results: [{ siren, nom_complet: `Acheteur ${siren}` }] }));
+      }
+      return new Response(JSON.stringify(approch));
+    }) as unknown as typeof fetch;
+    const http = new ThrottledHttp({ minIntervalMs: 0, fetchImpl });
+    const c = new ApprochConnector("https://example.test", http, http);
+    const out = [];
+    for await (const n of c.fetchNotices({ since: new Date(), cpvCodes: ["72000000"], keywords: [], countries: ["FR"] })) out.push(n);
+    expect(out).toHaveLength(approch.results.length);
+    expect(out[0].buyerName).toMatch(/^Acheteur \d{9}$/);
+    const sirens = new Set(approch.results.map((r) => r.siren_de_l_entite_acheteuse));
+    expect(calls.filter((u) => u.includes("recherche-entreprises"))).toHaveLength(sirens.size);
   });
 });
 
