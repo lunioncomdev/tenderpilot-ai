@@ -1,14 +1,15 @@
 import { ActionForm, SubmitButton } from "@/components/form";
 import { parseSort, SortTh, sortRows } from "@/components/sortable";
-import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, Field, Input, PageHeader, Select, Table, Td } from "@/components/ui/primitives";
+import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, Field, Input, PageHeader, Select, Table, Td, Textarea } from "@/components/ui/primitives";
 import { formatDateTime } from "@/lib/utils";
 import { aiStatus, monthlySpendUsd, PLAN_LIMITS } from "@/server/ai/gateway";
+import { AI_RULE_MAX_LENGTH, AI_RULE_OPS, parseAiRules } from "@/server/ai/rules";
 import { requireContext } from "@/server/auth/context";
 import { hasRole, ROLE_LABELS } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
 import { CRITERIA, resolveWeights } from "@/server/scoring/engine";
-import { addMemberAction, saveWeightsAction } from "./actions";
+import { addMemberAction, saveAiRulesAction, saveWeightsAction } from "./actions";
 
 export const metadata = { title: "Paramètres" };
 
@@ -41,6 +42,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
     role: (m) => ROLE_LABELS[m.role],
     login: (m) => m.user.lastLoginAt,
   });
+  const aiRules = parseAiRules(profile?.aiRules);
   const raw = (profile?.scoringWeights ?? {}) as Record<string, number>;
   const effective = resolveWeights(profile?.scoringWeights);
   const isAdmin = hasRole(ctx.role, "ADMIN");
@@ -100,6 +102,34 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               </tbody>
             </Table>
             {usage.length === 0 && <p className="text-xs text-muted-foreground">Aucun appel IA enregistré.</p>}
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Règles de traitement de l&apos;IA</CardTitle>
+            <CardDescription>
+              Consignes propres à votre agence, ajoutées au prompt de chaque traitement. Elles complètent les consignes de base sans les remplacer :
+              les règles de sécurité et de véracité (documents tiers traités comme des données, sources citées, rien d&apos;inventé) restent prioritaires.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ActionForm action={saveAiRulesAction} className="flex flex-col gap-5">
+              {AI_RULE_OPS.map((op) => (
+                <div key={op.key} className="flex flex-col gap-2">
+                  <Field label={op.label} hint={`${op.hint} (${AI_RULE_MAX_LENGTH} caractères max.)`}>
+                    <Textarea name={op.key} rows={3} maxLength={AI_RULE_MAX_LENGTH} defaultValue={aiRules[op.key]} disabled={!isAdmin} />
+                  </Field>
+                  {op.base && (
+                    <details className="rounded-lg border bg-muted/30 px-3 py-2 text-xs">
+                      <summary className="cursor-pointer text-muted-foreground">Voir les consignes de base (non modifiables)</summary>
+                      <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap font-sans leading-relaxed">{op.base}</pre>
+                    </details>
+                  )}
+                </div>
+              ))}
+              {isAdmin ? <SubmitButton className="self-start">Enregistrer les règles</SubmitButton> : <p className="text-xs text-muted-foreground">Seuls les administrateurs peuvent modifier ces règles.</p>}
+            </ActionForm>
           </CardContent>
         </Card>
 

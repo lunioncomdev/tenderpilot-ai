@@ -37,6 +37,14 @@ export function toScoringProfile(p: CompanyProfile | null): ScoringProfile | nul
     maxBudgetEur: p.maxBudgetEur,
     annualRevenueEur: p.annualRevenueEur,
     scoringWeights: p.scoringWeights,
+    practices: {
+      methodology: p.methodology,
+      qualityProcess: p.qualityProcess,
+      securityPolicy: p.securityPolicy,
+      gdprCommitments: p.gdprCommitments,
+      ecoDesign: p.ecoDesign,
+      accessibility: p.accessibility,
+    },
   };
 }
 

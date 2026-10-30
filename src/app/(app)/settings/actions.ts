@@ -9,6 +9,7 @@ import { hashPassword, PasswordSchema } from "@/server/auth/password";
 import { requireContext } from "@/server/auth/context";
 import { prisma } from "@/server/db";
 import { PLAN_LIMITS } from "@/server/ai/gateway";
+import { AiRulesSchema } from "@/server/ai/rules";
 import { CRITERIA } from "@/server/scoring/engine";
 
 export async function saveWeightsAction(_p: ActionState, fd: FormData): Promise<ActionState> {
@@ -45,5 +46,19 @@ export async function addMemberAction(_p: ActionState, fd: FormData): Promise<Ac
     await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "member.added", entityType: "User", entityId: user.id, metadata: { role: d.role } });
     revalidatePath("/settings");
     return { ok: true, message: "Collaborateur ajouté. Communiquez-lui son mot de passe initial par un canal sûr." };
+  });
+}
+
+export async function saveAiRulesAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("ADMIN");
+    const rules = AiRulesSchema.parse(formObject(fd));
+    await prisma.companyProfile.update({ where: { organizationId: ctx.orgId }, data: { aiRules: rules } });
+    await audit({
+      orgId: ctx.orgId, userId: ctx.userId, action: "ai.rules_updated", entityType: "CompanyProfile",
+      metadata: Object.fromEntries(Object.entries(rules).map(([k, v]) => [k, v.length])),
+    });
+    revalidatePath("/settings");
+    return { ok: true, message: "Règles enregistrées. Elles s'appliquent aux prochains traitements IA." };
   });
 }

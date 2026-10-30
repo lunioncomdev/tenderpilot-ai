@@ -3,6 +3,7 @@ import { audit } from "../audit";
 import { prisma } from "../db";
 import { env } from "../env";
 import { AiNotAllowedError, assertAiAllowed, callStructured } from "../ai/gateway";
+import { systemWithRules } from "../ai/rules";
 import { ANALYZE_TENDER_PROMPT_VERSION, ANALYZE_TENDER_SYSTEM, analyzeTenderPrompt } from "../ai/prompts/analyze-tender";
 import { NotFoundError } from "../auth/rbac";
 import { logger } from "../logger";
@@ -89,6 +90,8 @@ export async function runAnalysis(orgId: string, analysisId: string) {
     });
     const ctx = buildDceContext(tender.documents, env().AI_MAX_DCE_TOKENS);
     if (ctx.refs.size === 0) throw new Error("Aucun texte exploitable dans les documents");
+    const profile = await prisma.companyProfile.findUnique({ where: { organizationId: orgId }, select: { aiRules: true } });
+    const system = systemWithRules(ANALYZE_TENDER_SYSTEM, profile?.aiRules, "analysis");
 
     // Extraction en plusieurs passes (limite de taille des sorties structurées) ;
     // le préfixe système + DCE est identique d'une passe à l'autre, donc mis en cache.
@@ -108,7 +111,7 @@ export async function runAnalysis(orgId: string, analysisId: string) {
           // Seule la première passe porte le nom compté dans les quotas mensuels.
           operation: i === 0 ? "analyze_tender" : `analyze_tender:${part.key}`,
           promptVersion: ANALYZE_TENDER_PROMPT_VERSION,
-          system: ANALYZE_TENDER_SYSTEM,
+          system,
           context: ctx.text,
           prompt: `${basePrompt}
 

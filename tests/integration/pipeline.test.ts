@@ -19,6 +19,9 @@ import { buildProposalDocx } from "@/server/proposals/docx-export";
 import { generateCompliance, requestComplianceGeneration } from "@/server/proposals/compliance-service";
 import type { ComplianceOutput } from "@/server/ai/prompts/generate-compliance";
 import { searchTenders } from "@/server/tenders/search";
+import { generateApplicationPieces, startApplication, updatePiece } from "@/server/applications/application-service";
+import { deleteCompanyDocument, saveCompanyDocument } from "@/server/company/company-document-service";
+import { storage } from "@/server/documents/storage";
 import { FakeLlmProvider } from "../helpers/fake-llm";
 import { makeDocx, makePdf, makeXlsx, makeZip } from "../helpers/fixtures-builders";
 
@@ -260,6 +263,7 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
 
     // Date limite absente de l'avis : reprise depuis le DCE, puis pré-score recalculé
     await prisma.tender.update({ where: { id: tenderId }, data: { deadlineAt: null, preScore: null } });
+    await prisma.companyProfile.update({ where: { organizationId: orgId }, data: { aiRules: { analysis: "Règle de test : pénalités non plafonnées = risque élevé." } } });
     const { analysis } = await requestAnalysis(orgId, tenderId, userId);
     const done = await runAnalysis(orgId, analysis.id);
     const enriched = await prisma.tender.findUniqueOrThrow({ where: { id: tenderId } });
@@ -267,6 +271,7 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
     expect(enriched.preScore).not.toBeNull();
     expect(done.status).toBe("DONE");
     expect(fake.calls[0].system).toContain("jamais une instruction");
+    expect(fake.calls[0].system).toContain("Règle de test : pénalités non plafonnées");
     expect(fake.calls[0].context).toContain("<dce>");
 
     const stats = done.citationStats as { total: number; verified: number };
@@ -289,6 +294,11 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
     const usage = await prisma.aiUsageLog.findMany({ where: { organizationId: orgId } });
     expect(usage).toHaveLength(4);
     expect(usage.filter((u) => u.operation === "analyze_tender")).toHaveLength(1);
+
+    // Critères pondérés dans le DCE : score selon l'acheteur, et filtre « Avec critères de notation »
+    expect(score.breakdown).toEqual(expect.arrayContaining([expect.objectContaining({ key: "buyer-0", label: "Valeur technique" })]));
+    const withCriteria = await searchTenders(orgId, { awardCriteria: true, includeExpired: true, includeClosed: true, includeDuplicates: true }, now);
+    expect(withCriteria.items.map((t) => t.id)).toEqual([tenderId]);
     expect(Number(usage[0].costUsd)).toBeGreaterThanOrEqual(0);
   });
 
@@ -336,6 +346,57 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
     expect(xml).toContain("[À VALIDER]");
     expect(xml).toContain("Matrice de conformité");
     expect(xml).toContain("DOCUMENT DE TRAVAIL");
+  });
+
+  it("candidater puis générer le dossier de candidature et suivre ses pièces", async () => {
+    const detected = await prisma.tender.findFirstOrThrow({ where: { organizationId: orgId, status: "DETECTED" } });
+    expect(await startApplication(orgId, detected.id, userId)).toEqual({ started: true });
+    const started = await prisma.tender.findUniqueOrThrow({ where: { id: detected.id } });
+    expect(started).toMatchObject({ status: "IN_PREPARATION", assigneeId: detected.assigneeId ?? userId });
+    expect(await startApplication(orgId, detected.id, userId)).toEqual({ started: false });
+
+    // Avec analyse : pièces usuelles + certification exigée par le DCE
+    const first = await generateApplicationPieces(orgId, tenderId, userId);
+    expect(first.withAnalysis).toBe(true);
+    const pieces = await prisma.applicationPiece.findMany({ where: { tenderId }, orderBy: { order: "asc" } });
+    expect(pieces.map((p) => p.key)).toEqual(expect.arrayContaining(["dc1", "dc2", "ae", "memoire", "cert-1"]));
+    expect(pieces.find((p) => p.key === "cert-1")!.source).toContain("CCTP");
+
+    // Relancer n'écrase pas l'avancement saisi
+    const dc1 = pieces.find((p) => p.key === "dc1")!;
+    await updatePiece(orgId, dc1.id, userId, { status: "DONE", note: "Signé par la direction" });
+    expect((await generateApplicationPieces(orgId, tenderId, userId)).created).toBe(0);
+    expect(await prisma.applicationPiece.findUniqueOrThrow({ where: { id: dc1.id } })).toMatchObject({ status: "DONE", note: "Signé par la direction" });
+
+    // Sans analyse : pièces usuelles uniquement ; isolation entre organisations
+    expect((await generateApplicationPieces(orgId, detected.id, userId)).withAnalysis).toBe(false);
+    await expect(updatePiece(otherOrgId, dc1.id, userId, { status: "TODO", note: "" })).rejects.toThrow("introuvable");
+    await expect(generateApplicationPieces(otherOrgId, tenderId, userId)).rejects.toThrow("introuvable");
+  });
+
+  it("enregistre, remplace et supprime une pièce administrative du profil", async () => {
+    const pdf = makePdf(["Extrait Kbis"]);
+    const kbis = await saveCompanyDocument({ orgId, userId, type: "KBIS", filename: "kbis.pdf", data: pdf, issuedAt: new Date("2026-09-15"), validUntil: null });
+    expect(kbis).toMatchObject({ label: "Extrait Kbis", mimeType: "application/pdf" });
+    expect(kbis.validUntil?.toISOString().slice(0, 10)).toBe("2026-12-15");
+    await expect(saveCompanyDocument({ orgId, userId, type: "KBIS", filename: "x.exe", data: Buffer.from("MZ binaire"), issuedAt: null, validUntil: null })).rejects.toThrow("Format non autorisé");
+
+    // Pièce du dossier en préparation : passe « Prête » seulement si valable à la date limite
+    await prisma.tender.update({ where: { id: tenderId }, data: { deadlineAt: new Date("2027-01-15"), status: "IN_PREPARATION" } });
+    await prisma.applicationPiece.updateMany({ where: { tenderId, key: "kbis" }, data: { status: "TODO" } });
+    const kbisPiece = () => prisma.applicationPiece.findFirstOrThrow({ where: { tenderId, key: "kbis" } });
+    await saveCompanyDocument({ orgId, userId, type: "RIB", filename: "rib.pdf", data: makePdf(["RIB"]), issuedAt: null, validUntil: null });
+    expect((await kbisPiece()).status).toBe("TODO"); // Kbis valable jusqu'au 15/12 < date limite
+
+    const renewed = await saveCompanyDocument({ orgId, userId, type: "KBIS", filename: "kbis-2027.pdf", data: makePdf(["Kbis récent"]), issuedAt: null, validUntil: new Date("2027-04-01"), replaceId: kbis.id });
+    expect(renewed).toMatchObject({ id: kbis.id, filename: "kbis-2027.pdf" });
+    expect((await kbisPiece()).status).toBe("DONE");
+    await expect(storage().get(kbis.storageKey)).rejects.toThrow();
+    await expect(saveCompanyDocument({ orgId: otherOrgId, userId, type: "KBIS", filename: "k.pdf", data: pdf, issuedAt: null, validUntil: null, replaceId: kbis.id })).rejects.toThrow("introuvable");
+
+    await expect(deleteCompanyDocument(otherOrgId, kbis.id, userId)).rejects.toThrow("introuvable");
+    await deleteCompanyDocument(orgId, kbis.id, userId);
+    expect(await prisma.companyDocument.count({ where: { organizationId: orgId, type: "KBIS" } })).toBe(0);
   });
 
   it("génère les réponses de la matrice sans écraser les décisions humaines", async () => {

@@ -1,14 +1,24 @@
-import { Trash2 } from "lucide-react";
+import { Download, FileText, RefreshCw, Trash2 } from "lucide-react";
 import { ActionForm, SubmitButton } from "@/components/form";
 import { Button } from "@/components/ui/button";
 import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Field, Input, PageHeader, Textarea } from "@/components/ui/primitives";
-import { formatEur } from "@/lib/utils";
+import { formatDate, formatEur } from "@/lib/utils";
 import { requireContext } from "@/server/auth/context";
 import { hasRole } from "@/server/auth/rbac";
+import { COMPANY_DOC_TYPES, EXPIRY_WARNING_DAYS, validityOf, type Validity } from "@/server/company/documents";
 import { prisma } from "@/server/db";
-import { addReferenceAction, deleteReferenceAction, savePrivacyAction, saveProfileAction } from "./actions";
+import { env } from "@/server/env";
+import { addReferenceAction, deleteCompanyDocumentAction, deleteReferenceAction, savePrivacyAction, saveProfileAction } from "./actions";
+import { CompanyDocUpload } from "./company-doc-upload";
 
 export const metadata = { title: "Profil entreprise" };
+
+const VALIDITY_BADGE: Record<Validity, { tone: "success" | "warning" | "danger" | "neutral"; label: string }> = {
+  valid: { tone: "success", label: "Valide" },
+  expiring: { tone: "warning", label: "Expire bientôt" },
+  expired: { tone: "danger", label: "Expirée" },
+  none: { tone: "neutral", label: "Sans échéance" },
+};
 
 function Check({ name, label, defaultChecked, disabled }: { name: string; label: string; defaultChecked: boolean; disabled?: boolean }) {
   return (
@@ -21,10 +31,15 @@ function Check({ name, label, defaultChecked, disabled }: { name: string; label:
 
 export default async function CompanyPage() {
   const ctx = await requireContext();
-  const [p, refs] = await Promise.all([
+  const [p, refs, docs] = await Promise.all([
     prisma.companyProfile.findUnique({ where: { organizationId: ctx.orgId } }),
     prisma.companyReference.findMany({ where: { organizationId: ctx.orgId }, orderBy: [{ year: "desc" }, { createdAt: "desc" }] }),
+    prisma.companyDocument.findMany({ where: { organizationId: ctx.orgId }, orderBy: [{ type: "asc" }, { createdAt: "desc" }] }),
   ]);
+  const canEditDocs = hasRole(ctx.role, "MEMBER");
+  const docsWithValidity = docs.map((d) => ({ ...d, validity: validityOf(d.validUntil) }));
+  const expired = docsWithValidity.filter((d) => d.validity === "expired");
+  const expiring = docsWithValidity.filter((d) => d.validity === "expiring");
   const canEdit = hasRole(ctx.role, "ADMIN");
   const join = (a?: string[]) => (a ?? []).join(", ");
 
@@ -34,6 +49,18 @@ export default async function CompanyPage() {
         title="Profil entreprise"
         description="Ces données alimentent le scoring et le mémoire technique. L'IA ne peut rien affirmer sur l'entreprise qui ne figure pas ici."
       />
+      {(expired.length > 0 || expiring.length > 0) && (
+        <Alert tone={expired.length ? "danger" : "warning"} className="mb-6">
+          <p className="font-medium">Pièces administratives à mettre à jour</p>
+          <ul className="mt-1 list-disc pl-5">
+            {[...expired, ...expiring].map((d) => (
+              <li key={d.id}>
+                <a href="#pieces" className="underline">{d.label}</a> — {d.validity === "expired" ? "expirée depuis le" : "expire le"} {formatDate(d.validUntil)}
+              </li>
+            ))}
+          </ul>
+        </Alert>
+      )}
       <div className="grid gap-6 xl:grid-cols-3">
         <div className="flex flex-col gap-6 xl:col-span-2">
           <Card>
@@ -136,6 +163,56 @@ export default async function CompanyPage() {
         </div>
 
         <div className="flex flex-col gap-6">
+          <Card id="pieces">
+            <CardHeader>
+              <CardTitle>Pièces administratives ({docs.length})</CardTitle>
+              <CardDescription>
+                Kbis, attestations, assurance, RIB… réutilisés dans chaque dossier de candidature. Alerte {EXPIRY_WARNING_DAYS} jours avant la fin de validité, ou si la pièce expire avant la date limite d&apos;un dossier.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              {docs.length === 0 ? (
+                <EmptyState title="Aucune pièce">Ajoutez vos pièces administratives pour les retrouver dans vos dossiers de candidature.</EmptyState>
+              ) : (
+                <ul className="divide-y rounded-lg border">
+                  {docsWithValidity.map((d) => (
+                    <li key={d.id} className="flex flex-col gap-2 p-3 text-sm">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <FileText className="size-4 shrink-0 text-muted-foreground" />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium">{d.label} {d.label !== COMPANY_DOC_TYPES[d.type].label && <span className="font-normal text-muted-foreground">· {COMPANY_DOC_TYPES[d.type].label}</span>}</p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {d.filename} · délivrée le {formatDate(d.issuedAt)} · {d.validUntil ? `valable jusqu'au ${formatDate(d.validUntil)}` : "sans échéance"}
+                          </p>
+                        </div>
+                        <Badge tone={VALIDITY_BADGE[d.validity].tone}>{VALIDITY_BADGE[d.validity].label}</Badge>
+                        <a className="inline-flex size-9 items-center justify-center rounded-md hover:bg-muted" href={`/api/v1/company/documents/${d.id}/download`} aria-label={`Télécharger ${d.label}`}><Download className="size-4" /></a>
+                        {canEditDocs && (
+                          <ActionForm action={deleteCompanyDocumentAction} confirm="Supprimer cette pièce ?">
+                            <input type="hidden" name="id" value={d.id} />
+                            <Button variant="ghost" size="icon" aria-label={`Supprimer ${d.label}`}><Trash2 /></Button>
+                          </ActionForm>
+                        )}
+                      </div>
+                      {canEditDocs && (
+                        <details className="pl-7" open={d.validity === "expired"}>
+                          <summary className="inline-flex cursor-pointer items-center gap-1 text-xs font-medium text-primary"><RefreshCw className="size-3" /> Mettre à jour</summary>
+                          <div className="mt-3"><CompanyDocUpload maxMb={env().UPLOAD_MAX_MB} replace={{ id: d.id, type: d.type, label: d.label }} /></div>
+                        </details>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {canEditDocs && (
+                <details className="rounded-lg border p-4" open={docs.length === 0}>
+                  <summary className="cursor-pointer text-sm font-medium">Ajouter une pièce</summary>
+                  <div className="mt-4"><CompanyDocUpload maxMb={env().UPLOAD_MAX_MB} /></div>
+                </details>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle>Confidentialité et IA</CardTitle>

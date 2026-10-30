@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Download, ExternalLink, FileText, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { Briefcase, ClipboardList, Download, ExternalLink, FileText, RefreshCw, Send, Sparkles, Trash2 } from "lucide-react";
 import { DeadlineBadge, NoticeStateBadge, RecommendationBadge, ScorePill, StatusBadge } from "@/components/badges";
 import { AutoRefresh, UploadDocuments } from "@/components/client-utils";
 import { ActionForm, SubmitButton } from "@/components/form";
@@ -9,17 +9,20 @@ import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle
 import { fr } from "@/i18n/fr";
 import { formatDate, formatDateTime, formatEur, NOT_SPECIFIED } from "@/lib/utils";
 import { aiStatus } from "@/server/ai/gateway";
+import { APPLICATION_STATUSES, pieceProgress, PRE_APPLICATION_STATUSES } from "@/server/applications/pieces";
 import { boampNoticePdfUrl } from "@/server/connectors/boamp";
 import type { TenderAnalysisResult } from "@/server/analysis/schema";
 import { requireContext } from "@/server/auth/context";
+import { linkCompanyDocs } from "@/server/company/documents";
 import { hasRole } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
 import { LEVEL_LABELS, scoreLevel, type CriterionResult, type EliminatoryCheck } from "@/server/scoring/engine";
 import { AnalysisView } from "./analysis-view";
+import { ApplicationPieces } from "./application-pieces";
 import {
-  addCommentAction, createProposalAction, deleteDocumentAction, importNoticePdfAction, recomputeScoreAction, reprocessDocumentAction,
-  requestAnalysisAction, setDocumentKindAction, updateWorkflowAction,
+  addCommentAction, applyAction, createProposalAction, deleteDocumentAction, generateApplicationAction, importNoticePdfAction, recomputeScoreAction,
+  reprocessDocumentAction, requestAnalysisAction, setDocumentKindAction, updateWorkflowAction,
 } from "./actions";
 
 const ELIM_TONE = { PASS: "success", FAIL: "danger", UNKNOWN: "warning", WARN: "warning" } as const;
@@ -42,15 +45,17 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
       analyses: { orderBy: { createdAt: "desc" }, take: 1 },
       scores: { orderBy: { createdAt: "desc" }, take: 1 },
       proposals: { select: { id: true, title: true, status: true } },
+      pieces: { orderBy: [{ order: "asc" }, { createdAt: "asc" }] },
       comments: { orderBy: { createdAt: "asc" }, include: { author: { select: { name: true } } } },
       duplicateOf: { select: { id: true, title: true, origin: true } },
       duplicates: { select: { id: true, origin: true, publicationRef: true } },
     },
   });
   if (!tender) notFound();
-  const [members, history] = await Promise.all([
+  const [members, history, companyDocs] = await Promise.all([
     prisma.membership.findMany({ where: { organizationId: ctx.orgId }, include: { user: { select: { id: true, name: true } } } }),
     prisma.auditLog.findMany({ where: { organizationId: ctx.orgId, entityType: "Tender", entityId: tender.id }, orderBy: { createdAt: "desc" }, take: 15, include: { user: { select: { name: true } } } }),
+    prisma.companyDocument.findMany({ where: { organizationId: ctx.orgId }, orderBy: { createdAt: "desc" }, select: { id: true, type: true, label: true, filename: true, validUntil: true } }),
   ]);
 
   const analysis = tender.analyses[0];
@@ -58,6 +63,14 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
   const canEdit = hasRole(ctx.role, "MEMBER");
   const ai = aiStatus();
   const extracted = tender.documents.filter((d) => d.status === "EXTRACTED" && !d.mimeType.includes("zip")).length;
+  const canApply = PRE_APPLICATION_STATUSES.includes(tender.status);
+  const inApplication = APPLICATION_STATUSES.includes(tender.status);
+  const progress = pieceProgress(tender.pieces);
+  const pieceViews = tender.pieces.map(({ id, key, group, label, detail, source, fromDce, status, note }) => ({
+    id, key, group, label, detail, source, fromDce, status, note, profile: linkCompanyDocs({ key, detail }, companyDocs, tender.deadlineAt),
+  }));
+  // Pièces requises dont la pièce du profil manque, est expirée ou expire avant la date limite.
+  const docIssues = pieceViews.filter((p) => p.status !== "NOT_APPLICABLE" && p.profile && (p.profile.missing.length > 0 || p.profile.docs.some((d) => d.alert === "expired" || d.alert === "before-deadline")));
   const processing = tender.documents.some((d) => d.status === "UPLOADED" || d.status === "PROCESSING") || analysis?.status === "PENDING" || analysis?.status === "RUNNING";
 
   return (
@@ -74,6 +87,13 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
         <h1 className="text-2xl font-semibold leading-tight tracking-tight">{tender.title}</h1>
         <p className="text-muted-foreground">{tender.buyerName || "Acheteur non précisé"}</p>
         <div className="flex flex-wrap gap-2">
+          {canEdit && canApply && (
+            <ActionForm action={applyAction}>
+              <input type="hidden" name="tenderId" value={tender.id} />
+              <SubmitButton size="sm" pendingText="Candidature…"><Send /> Candidater</SubmitButton>
+            </ActionForm>
+          )}
+          {inApplication && <Link className={buttonVariants({ variant: "secondary", size: "sm" })} href="/pipeline"><Briefcase /> Suivre dans Mes candidatures</Link>}
           {tender.noticeUrl && <a className={buttonVariants({ variant: "outline", size: "sm" })} href={tender.noticeUrl} target="_blank" rel="noreferrer"><ExternalLink /> Avis officiel</a>}
           {tender.documentsUrl && <a className={buttonVariants({ variant: "outline", size: "sm" })} href={tender.documentsUrl} target="_blank" rel="noreferrer"><ExternalLink /> Dossier de consultation (DCE)</a>}
           {tender.origin === "BOAMP" && tender.publishedAt && (
@@ -88,6 +108,44 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
 
       <div className="grid gap-6 xl:grid-cols-3">
         <div className="flex flex-col gap-6 xl:col-span-2">
+          {(inApplication || tender.pieces.length > 0) && (
+            <Card>
+              <CardHeader>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle>Dossier de candidature</CardTitle>
+                  {canEdit && (
+                    <ActionForm action={generateApplicationAction}>
+                      <input type="hidden" name="tenderId" value={tender.id} />
+                      <SubmitButton size="sm" variant={tender.pieces.length ? "outline" : "default"} pendingText="Génération…">
+                        <ClipboardList /> {tender.pieces.length ? "Mettre à jour depuis l'analyse" : "Générer le dossier de candidature"}
+                      </SubmitButton>
+                    </ActionForm>
+                  )}
+                </div>
+                <CardDescription>
+                  {tender.pieces.length === 0
+                    ? analysis?.status === "DONE"
+                      ? "Liste des pièces à réunir : pièces usuelles d'un marché public et pièces exigées par le DCE analysé."
+                      : "Sans analyse du DCE, seules les pièces usuelles seront listées. Analysez le DCE pour y ajouter ses exigences."
+                    : `${progress.done} / ${progress.total} pièce(s) prête(s). Les pièces « Non requises » ne comptent pas.`}
+                </CardDescription>
+              </CardHeader>
+              {tender.pieces.length > 0 && (
+                <CardContent className="flex flex-col gap-4">
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={progress.done} aria-valuemax={progress.total} aria-label="Avancement du dossier">
+                    <div className={`h-full rounded-full ${progress.total && progress.done === progress.total ? "bg-success" : "bg-primary"}`} style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }} />
+                  </div>
+                  {docIssues.length > 0 && (
+                    <Alert tone="warning">
+                      {docIssues.length} pièce(s) à compléter ou mettre à jour dans le <Link href="/company#pieces" className="underline">profil entreprise</Link> : {docIssues.map((p) => p.label).join(", ")}.
+                    </Alert>
+                  )}
+                  <ApplicationPieces tenderId={tender.id} canEdit={canEdit} proposalId={tender.proposals[0]?.id} pieces={pieceViews} />
+                </CardContent>
+              )}
+            </Card>
+          )}
+
           <Card>
             <CardHeader><CardTitle>Informations de l&apos;avis</CardTitle></CardHeader>
             <CardContent>
@@ -227,6 +285,11 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                     </div>
                   </div>
                   <p>{score.justification}</p>
+                  <p className="text-xs font-medium text-muted-foreground">
+                    {(score.breakdown as CriterionResult[]).some((b) => String(b.key).startsWith("buyer-"))
+                      ? "Critères et pondérations de l'acheteur (DCE)"
+                      : "Barème interne (l'acheteur n'a pas publié de critères pondérés)"}
+                  </p>
                   <div className="flex flex-col gap-2">
                     {(score.breakdown as CriterionResult[]).map((b) => (
                       <div key={b.key} title={b.rationale}>
@@ -255,7 +318,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                       </div>
                     ) : null,
                   )}
-                  <p className="text-xs text-muted-foreground">Calculé le {formatDateTime(score.createdAt)} — moteur déterministe, pondérations modifiables dans Paramètres.</p>
+                  <p className="text-xs text-muted-foreground">Calculé le {formatDateTime(score.createdAt)} — moteur déterministe. Barème interne modifiable dans Paramètres ; les critères de l&apos;acheteur priment quand il les publie.</p>
                 </>
               )}
             </CardContent>

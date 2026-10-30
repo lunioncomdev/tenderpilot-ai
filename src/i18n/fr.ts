@@ -1,4 +1,4 @@
-import type { DocumentKind, DocumentStatus, NoticeState, Recommendation, SectionStatus, TenderOrigin, TenderStatus, ComplianceStatus } from "@prisma/client";
+import type { DocumentKind, DocumentStatus, NoticeState, Recommendation, SectionStatus, TenderOrigin, TenderStatus, ComplianceStatus, PieceGroup, PieceStatus } from "@prisma/client";
 
 /**
  * Libellés français. Toute chaîne d'interface partagée passe par ce dictionnaire
@@ -39,6 +39,8 @@ export const fr = {
   documentStatus: { UPLOADED: "En attente", PROCESSING: "Traitement…", EXTRACTED: "Extrait", NEEDS_OCR: "OCR requis", FAILED: "Échec" } satisfies Record<DocumentStatus, string>,
   sectionStatus: { PENDING: "À rédiger", GENERATING: "Génération…", AI_DRAFT: "Brouillon IA", EDITED: "Modifiée", VALIDATED: "Validée", FAILED: "Échec" } satisfies Record<SectionStatus, string>,
   complianceStatus: { COMPLIANT: "Conforme", PARTIAL: "Partiel", NON_COMPLIANT: "Non conforme", TO_VERIFY: "À vérifier" } satisfies Record<ComplianceStatus, string>,
+  pieceStatus: { TODO: "À faire", IN_PROGRESS: "En cours", DONE: "Prête", NOT_APPLICABLE: "Non requise" } satisfies Record<PieceStatus, string>,
+  pieceGroup: { CANDIDATURE: "Pièces de candidature", OFFRE: "Pièces de l'offre" } satisfies Record<PieceGroup, string>,
 } as const;
 
 export const PIPELINE_ORDER: TenderStatus[] = [

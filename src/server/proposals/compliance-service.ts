@@ -1,5 +1,6 @@
 import { audit } from "../audit";
 import { assertAiAllowed, callStructured } from "../ai/gateway";
+import { systemWithRules } from "../ai/rules";
 import {
   ComplianceOutputSchema,
   GENERATE_COMPLIANCE_PROMPT_VERSION,
@@ -58,7 +59,7 @@ export async function generateCompliance(orgId: string, proposalId: string, over
         {
           operation: "generate_compliance",
           promptVersion: GENERATE_COMPLIANCE_PROMPT_VERSION,
-          system: GENERATE_COMPLIANCE_SYSTEM,
+          system: systemWithRules(GENERATE_COMPLIANCE_SYSTEM, profile?.aiRules, "compliance"),
           context: ctx.text,
           prompt: generateCompliancePrompt({
             company: companyBlock(profile),

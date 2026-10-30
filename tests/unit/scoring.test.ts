@@ -130,9 +130,70 @@ describe("score", () => {
     expect(risky.risks[0]).toContain("élevé");
   });
 
-  it("montant inconnu : note neutre + information manquante", () => {
+  it("montant inconnu : tous les points + information manquante", () => {
     const s = computeScore({ tender: { ...tender, estimatedValue: null }, profile, analysis: analysis(), references: refs, now });
-    expect(s.breakdown.find((b) => b.key === "financial")!.ratio).toBe(0.5);
+    expect(s.breakdown.find((b) => b.key === "financial")!.ratio).toBe(1);
     expect(s.missingInfo).toContain("Budget / montant estimé");
+  });
+
+  it("ce qui n'est pas évoqué ne retire aucun point, mais reste à vérifier", () => {
+    const bare = { ...tender, estimatedValue: null, deadlineAt: null };
+    const s = computeScore({ tender: bare, profile, analysis: null, references: [], now });
+    for (const key of ["capabilities", "financial", "schedule", "administrative", "contractual"]) {
+      expect(s.breakdown.find((b) => b.key === key)!.ratio).toBe(1);
+    }
+    expect(s.eliminatory.find((e) => e.key === "deadline")?.status).toBe("UNKNOWN");
+    expect(s.recommendation).not.toBe("GO");
+  });
+
+  it("une exigence évoquée et non satisfaite retire des points", () => {
+    const s = computeScore({ tender, profile, analysis: analysis({ minReferences: 4 }), references: refs, now });
+    expect(s.breakdown.find((b) => b.key === "capabilities")!.ratio).toBeCloseTo(0.5);
+    const docs = Array.from({ length: 12 }, (_, i) => ({ text: `Pièce ${i}`, sources: [] }));
+    expect(computeScore({ tender, profile, analysis: analysis({ mandatoryDocuments: docs }), references: refs, now }).breakdown.find((b) => b.key === "administrative")!.ratio).toBe(0.5);
+  });
+});
+
+describe("critères de notation de l'acheteur", () => {
+  const withPractices: ScoringProfile = { ...profile, practices: { methodology: "Agile, sprints de 2 semaines", ecoDesign: "" } };
+  const award = (criterion: string, weightPercent: number | null) => ({ criterion, weightPercent, subCriteria: [], sources: [] });
+
+  it("remplace le barème interne et applique les pondérations du DCE", () => {
+    const s = computeScore({
+      tender, profile: withPractices, references: refs, now,
+      analysis: analysis({ awardCriteria: [award("Valeur technique", 55), award("Prix des prestations", 35), award("Démarche environnementale", 10)] }),
+    });
+    expect(s.basis).toBe("buyer");
+    expect(s.breakdown.map((b) => b.weight)).toEqual([55, 35, 10]);
+    // Environnement : éco-conception non renseignée → note neutre et point faible
+    expect(s.breakdown[2].ratio).toBe(0.5);
+    expect(s.weaknesses.join(" ")).toContain("éco-conception");
+    // Prix : montant dans la fourchette du profil → tous les points
+    expect(s.breakdown[1].ratio).toBe(1);
+    expect(s.total).toBe(Math.round(s.breakdown.reduce((a, b) => a + b.ratio * b.weight, 0)));
+    expect(s.justification).toContain("critère(s) de notation de l'acheteur");
+  });
+
+  it("lit les pondérations exprimées en points et ramène le total à 100", () => {
+    const s = computeScore({
+      tender, profile: withPractices, references: refs, now,
+      analysis: analysis({ awardCriteria: [award("Prix – 30 points", null), award("Qualité de la méthodologie et de l'organisation – 10 points", null)] }),
+    });
+    expect(s.breakdown.map((b) => b.weight)).toEqual([75, 25]);
+    expect(s.breakdown[1].ratio).toBe(1); // méthodologie rédigée dans le profil
+  });
+
+  it("sans pondération publiée, garde le barème interne", () => {
+    const s = computeScore({ tender, profile, references: refs, now, analysis: analysis({ awardCriteria: [award("Offre économiquement la plus avantageuse", null)] }) });
+    expect(s.basis).toBe("internal");
+    expect(s.breakdown).toHaveLength(6);
+  });
+
+  it("les critères éliminatoires priment toujours", () => {
+    const s = computeScore({
+      tender: { ...tender, deadlineAt: new Date("2026-10-01") }, profile: withPractices, references: refs, now,
+      analysis: analysis({ awardCriteria: [award("Valeur technique", 60), award("Prix", 40)] }),
+    });
+    expect(s.recommendation).toBe("NO_GO");
   });
 });

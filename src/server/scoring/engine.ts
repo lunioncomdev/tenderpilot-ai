@@ -4,6 +4,12 @@ import type { TenderAnalysisResult } from "../analysis/schema";
 /**
  * Moteur de scoring déterministe. L'IA fournit des faits (analyse du DCE) ;
  * les notes, les critères éliminatoires et la recommandation sont calculés ici.
+ *
+ * Un point que l'avis ou le DCE n'évoque pas (montant, date, pièces, risques,
+ * exigences de références ou de certifications) ne retire aucun point : seul ce
+ * qui est mentionné et défavorable fait baisser la note. L'absence reste listée
+ * dans les informations manquantes, et les contrôles éliminatoires (date limite
+ * inconnue, DCE non analysé…) empêchent toujours un GO sans vérification.
  */
 
 export type CriterionKey = "technical" | "capabilities" | "financial" | "schedule" | "administrative" | "contractual";
@@ -30,7 +36,11 @@ export type ScoringProfile = {
   maxBudgetEur: number | null;
   annualRevenueEur: number | null;
   scoringWeights?: unknown;
+  /** Démarches rédigées dans le profil (méthodologie, qualité, sécurité, RGPD, éco-conception, accessibilité). */
+  practices?: Partial<Record<PracticeKey, string>>;
 };
+
+export type PracticeKey = "methodology" | "qualityProcess" | "securityPolicy" | "gdprCommitments" | "ecoDesign" | "accessibility";
 
 export type ScoringTender = {
   title: string;
@@ -46,7 +56,8 @@ export type ScoringReference = { title: string; description: string; technologie
 
 export type EliminatoryStatus = "PASS" | "FAIL" | "UNKNOWN" | "WARN";
 export type EliminatoryCheck = { key: string; label: string; status: EliminatoryStatus; detail: string };
-export type CriterionResult = { key: CriterionKey; label: string; weight: number; points: number; ratio: number; rationale: string };
+/** `key` : critère interne, ou `buyer-n` pour le n-ième critère de notation du DCE. */
+export type CriterionResult = { key: CriterionKey | `buyer-${number}`; label: string; weight: number; points: number; ratio: number; rationale: string };
 export type RecommendationT = "GO" | "NO_GO" | "TO_VERIFY";
 
 export type ScoreResult = {
@@ -61,6 +72,8 @@ export type ScoreResult = {
   risks: string[];
   justification: string;
   weights: Weights;
+  /** `buyer` : score calculé avec les critères de notation et pondérations publiés par l'acheteur. */
+  basis: "buyer" | "internal";
 };
 
 export function resolveWeights(overrides: unknown): Weights {
@@ -122,6 +135,7 @@ type Ctx = {
   missing: string[];
   strengths: string[];
   weaknesses: string[];
+  similarReferences: number;
 };
 
 function technical(c: Ctx): [number, string] {
@@ -162,14 +176,25 @@ function capabilities(c: Ctx): [number, string] {
     const techOverlap = r.technologies.some((t) => reqSkills.some((s) => termMatches(s, t)));
     return overlap >= 2 || techOverlap;
   });
-  let ratio = similar.length >= 3 ? 1 : similar.length === 2 ? 0.8 : similar.length === 1 ? 0.55 : 0.2;
-  let detail = `${similar.length} référence(s) similaire(s).`;
   if (similar.length) c.strengths.push(`Références similaires : ${similar.slice(0, 3).map((r) => r.title).join(" ; ")}`);
+  c.similarReferences = similar.length;
+  const similarDetail = `${similar.length} référence(s) similaire(s).`;
+
+  // Seules les exigences évoquées par le DCE (certifications, nombre de références) retirent des points.
   const certs = c.analysis?.requiredCertifications ?? [];
-  if (certs.length && c.profile) {
-    const held = certs.filter((rc) => c.profile!.certifications.some((pc) => termMatches(rc.text, pc)));
+  const minRefs = c.analysis?.minReferences ?? null;
+  if (!certs.length && !minRefs) return [1, `Aucune exigence de références ou de certification évoquée. ${similarDetail}`];
+  let ratio = 1;
+  let detail = similarDetail;
+  if (certs.length) {
+    const held = certs.filter((rc) => (c.profile?.certifications ?? []).some((pc) => termMatches(rc.text, pc)));
     ratio *= held.length / certs.length;
     detail += ` Certifications exigées détenues : ${held.length}/${certs.length}.`;
+  }
+  if (minRefs) {
+    const citable = c.references.filter((r) => r.isPublic).length;
+    ratio *= Math.min(1, citable / minRefs);
+    detail += ` Références citables : ${citable}/${minRefs} exigées.`;
   }
   return [clamp(ratio), detail];
 }
@@ -178,7 +203,7 @@ function financial(c: Ctx): [number, string] {
   const value = c.analysis?.budgetAmountEur ?? c.tender.estimatedValue;
   if (value === null || value === undefined) {
     c.missing.push("Budget / montant estimé");
-    return [0.5, "Montant non communiqué : note neutre."];
+    return [1, "Montant non évoqué : aucun point retiré."];
   }
   const min = c.profile?.minBudgetEur ?? null;
   const max = c.profile?.maxBudgetEur ?? null;
@@ -201,7 +226,7 @@ function schedule(c: Ctx): [number, string] {
   const deadline = iso && !Number.isNaN(iso.getTime()) ? iso : c.tender.deadlineAt;
   if (!deadline) {
     c.missing.push("Date limite de remise des offres");
-    return [0.5, "Date limite inconnue : note neutre."];
+    return [1, "Date limite non évoquée : aucun point retiré (à vérifier avant décision)."];
   }
   const days = Math.floor((deadline.getTime() - c.now.getTime()) / 86_400_000);
   if (days < 0) return [0, "Date limite dépassée."];
@@ -213,7 +238,7 @@ function schedule(c: Ctx): [number, string] {
 function administrative(c: Ctx): [number, string] {
   if (!c.analysis) {
     c.missing.push("Pièces administratives exigées (DCE non analysé)");
-    return [0.6, "DCE non analysé : note par défaut."];
+    return [1, "Aucune pièce exigée évoquée (DCE non analysé) : aucun point retiré."];
   }
   const n = c.analysis.mandatoryDocuments.length;
   let r = n <= 5 ? 1 : n <= 10 ? 0.75 : n <= 15 ? 0.5 : 0.3;
@@ -224,12 +249,98 @@ function administrative(c: Ctx): [number, string] {
 function contractual(c: Ctx): [number, string] {
   if (!c.analysis) {
     c.missing.push("Clauses contractuelles (CCAP non analysé)");
-    return [0.6, "CCAP non analysé : note par défaut."];
+    return [1, "Aucune clause défavorable évoquée (CCAP non analysé) : aucun point retiré."];
   }
   const penalty = { high: 0.35, medium: 0.15, low: 0.05 } as const;
   const sum = c.analysis.risks.reduce((acc, r) => acc + penalty[r.severity], 0);
   const high = c.analysis.risks.filter((r) => r.severity === "high").length;
   return [clamp(1 - sum), `${c.analysis.risks.length} risque(s) identifié(s), dont ${high} élevé(s).`];
+}
+
+// ───────────── Critères de notation de l'acheteur ─────────────
+
+type BuyerKind = "price" | "environment" | "social" | "accessibility" | "security" | "schedule" | "references" | "methodology" | "quality" | "technical";
+
+/** Classement par mots-clés, dans cet ordre (« Qualité technique » → technique, « Qualité des livrables » → qualité). */
+const BUYER_KINDS: Array<[BuyerKind, RegExp]> = [
+  ["price", / (prix|financiere?s?|couts?|montant|dqe|bpu|tarifs?) /],
+  ["environment", / (environnement(ale?s?)?|eco ?conception|developpement durable|frugal(e|ite)?|energetiques?|carbone|rse) /],
+  ["social", / (sociale?s?|insertion|solidaires?) /],
+  ["accessibility", / (accessibilite|rgaa|ergonomie|ux|ui|experience utilisateur) /],
+  ["security", / (securite|rgpd|souverainete|donnees personnelles|confidentialite) /],
+  ["schedule", / (delais?|calendrier|planning|reactivite) /],
+  ["references", / (references?|experiences?) /],
+  ["methodology", / (methodologie|organisation|gestion de projet|comprehension|demarche) /],
+  ["quality", / (qualite des livrables|garanties?|qualite de service|sla) /],
+];
+
+const PRACTICE_FOR: Partial<Record<BuyerKind, { fields: PracticeKey[]; label: string }>> = {
+  environment: { fields: ["ecoDesign"], label: "Démarche d'éco-conception" },
+  accessibility: { fields: ["accessibility"], label: "Démarche d'accessibilité" },
+  security: { fields: ["securityPolicy", "gdprCommitments"], label: "Politique de sécurité / RGPD" },
+  methodology: { fields: ["methodology", "qualityProcess"], label: "Méthodologie" },
+  quality: { fields: ["qualityProcess", "methodology"], label: "Démarche qualité" },
+};
+
+function classifyBuyerCriterion(text: string): BuyerKind {
+  const padded = ` ${normalizeText(text)} `;
+  return BUYER_KINDS.find(([, re]) => re.test(padded))?.[0] ?? "technical";
+}
+
+/** Pondération en % si donnée, sinon « 30 points » lu dans l'intitulé. */
+function buyerWeight(c: { criterion: string; weightPercent: number | null }): number | null {
+  if (c.weightPercent !== null && c.weightPercent > 0) return c.weightPercent;
+  const pts = /(\d+(?:[.,]\d+)?)\s*points?\b/i.exec(c.criterion);
+  return pts ? Number(pts[1].replace(",", ".")) : null;
+}
+
+/** Note (0 à 1) d'un critère de l'acheteur, à partir des notes internes et du profil. */
+function rateBuyerCriterion(kind: BuyerKind, internal: Record<CriterionKey, CriterionResult>, c: Ctx): [number, string] {
+  const fromInternal = (k: CriterionKey) => [internal[k].ratio, internal[k].rationale] as [number, string];
+  switch (kind) {
+    case "price":
+      return fromInternal("financial");
+    case "schedule":
+      return fromInternal("schedule");
+    case "technical":
+      return fromInternal("technical");
+    case "references": {
+      const n = c.similarReferences;
+      return [n >= 3 ? 1 : n === 2 ? 0.8 : n === 1 ? 0.55 : 0.2, `${n} référence(s) similaire(s) à valoriser.`];
+    }
+    case "social":
+      c.missing.push("Engagements sociaux / insertion (non renseignés dans le profil)");
+      return [0.5, "Critère social : aucun engagement renseigné dans le profil, note neutre."];
+    default: {
+      const practice = PRACTICE_FOR[kind]!;
+      const filled = practice.fields.some((f) => (c.profile?.practices?.[f] ?? "").trim().length > 0);
+      if (filled) return [1, `${practice.label} rédigée dans le profil, mobilisable dans le mémoire.`];
+      c.missing.push(`${practice.label} (à rédiger dans le profil entreprise)`);
+      c.weaknesses.push(`${practice.label} attendue par l'acheteur mais non renseignée`);
+      return [0.5, `${practice.label} non renseignée dans le profil.`];
+    }
+  }
+}
+
+/** Critères de notation pondérés du DCE, notés selon le profil ; `null` si l'acheteur n'en publie pas. */
+function buyerBreakdown(c: Ctx, internal: Record<CriterionKey, CriterionResult>): CriterionResult[] | null {
+  const criteria = (c.analysis?.awardCriteria ?? [])
+    .map((a) => ({ label: a.criterion, weight: buyerWeight(a) }))
+    .filter((a): a is { label: string; weight: number } => a.weight !== null);
+  const sum = criteria.reduce((s, a) => s + a.weight, 0);
+  if (!criteria.length || sum <= 0) return null;
+  return criteria.map((a, i) => {
+    const w = (a.weight * 100) / sum;
+    const [ratio, rationale] = rateBuyerCriterion(classifyBuyerCriterion(a.label), internal, c);
+    return {
+      key: `buyer-${i}` as const,
+      label: a.label.length > 90 ? `${a.label.slice(0, 87)}…` : a.label,
+      weight: Math.round(w * 10) / 10,
+      ratio,
+      points: Math.round(ratio * w * 10) / 10,
+      rationale,
+    };
+  });
 }
 
 export function eliminatoryChecks(c: Omit<Ctx, "missing" | "strengths" | "weaknesses">): EliminatoryCheck[] {
@@ -347,6 +458,7 @@ export function computeScore(input: {
     missing: [],
     strengths: [],
     weaknesses: [],
+    similarReferences: 0,
   };
   const weights = resolveWeights(input.profile?.scoringWeights);
   const fns: Record<CriterionKey, (c: Ctx) => [number, string]> = {
@@ -358,11 +470,16 @@ export function computeScore(input: {
     contractual,
   };
 
-  const breakdown = CRITERIA.map(({ key, label }) => {
+  const internal = CRITERIA.map(({ key, label }) => {
     const [ratio, rationale] = fns[key](ctx);
     return { key, label, weight: Math.round(weights[key] * 10) / 10, ratio, points: Math.round(ratio * weights[key] * 10) / 10, rationale };
   });
-  const total = Math.round(breakdown.reduce((a, b) => a + b.ratio * weights[b.key], 0));
+  // Critères publiés par l'acheteur : ils remplacent le barème interne.
+  const buyer = buyerBreakdown(ctx, Object.fromEntries(internal.map((b) => [b.key, b])) as Record<CriterionKey, CriterionResult>);
+  const breakdown: CriterionResult[] = buyer ?? internal;
+  const total = buyer
+    ? Math.round(buyer.reduce((a, b) => a + b.ratio * b.weight, 0))
+    : Math.round(internal.reduce((a, b) => a + b.ratio * weights[b.key], 0));
   const eliminatory = eliminatoryChecks(ctx);
 
   const failed = eliminatory.filter((e) => e.status === "FAIL");
@@ -374,7 +491,9 @@ export function computeScore(input: {
   else recommendation = "GO";
 
   const level = scoreLevel(total);
-  const parts = [`Score ${total}/100 (${LEVEL_LABELS[level]}).`];
+  const parts = [
+    `Score ${total}/100 (${LEVEL_LABELS[level]})${buyer ? `, calculé selon les ${buyer.length} critère(s) de notation de l'acheteur` : ""}.`,
+  ];
   if (failed.length) parts.push(`Critère(s) éliminatoire(s) non satisfait(s) : ${failed.map((f) => f.label).join(", ")} — NO-GO quel que soit le score.`);
   else if (unknown.length) parts.push(`À vérifier avant décision : ${unknown.map((u) => u.label).join(", ")}.`);
   const best = [...breakdown].sort((a, b) => b.ratio - a.ratio)[0];
@@ -393,5 +512,6 @@ export function computeScore(input: {
     risks: (input.analysis?.risks ?? []).map((r) => `[${r.severity === "high" ? "élevé" : r.severity === "medium" ? "moyen" : "faible"}] ${r.text}`),
     justification: parts.join(" "),
     weights,
+    basis: buyer ? "buyer" : "internal",
   };
 }

@@ -29,6 +29,8 @@ export const SearchFiltersSchema = z.object({
   includeExpired: optBool.default(false),
   includeDuplicates: optBool.default(false),
   includeClosed: optBool.default(false),
+  /** Seulement les offres notées avec les critères de notation pondérés publiés par l'acheteur. */
+  awardCriteria: optBool.default(false),
   sort: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["relevance", "deadline", "published", "score", "value", "title", "status"]).optional()),
   /** Sens du tri ; par défaut, celui de la colonne (montant et score décroissants, échéance croissante…). */
   dir: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["asc", "desc"]).optional()),
@@ -47,6 +49,19 @@ export function parseSearchParams(sp: Record<string, string | string[] | undefin
   const flat = Object.fromEntries(Object.entries(sp).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v]));
   const r = SearchFiltersSchema.safeParse(flat);
   return r.success ? r.data : SearchFiltersSchema.parse({});
+}
+
+/** Offres dont le dernier score a été calculé avec les critères de notation de l'acheteur. */
+async function buyerScoredIds(orgId: string): Promise<string[]> {
+  const rows = await prisma.$queryRaw<Array<{ tenderId: string }>>(Prisma.sql`
+    SELECT "tenderId" FROM (
+      SELECT DISTINCT ON ("tenderId") "tenderId", breakdown
+      FROM "TenderScore"
+      WHERE "organizationId" = ${orgId}
+      ORDER BY "tenderId", "createdAt" DESC
+    ) latest
+    WHERE latest.breakdown -> 0 ->> 'key' LIKE 'buyer-%'`);
+  return rows.map((r) => r.tenderId);
 }
 
 /** Identifiants correspondant à la requête plein texte, triés par pertinence. */
@@ -73,6 +88,7 @@ export async function searchTenders(orgId: string, input: SearchFilters, now = n
   if (!f.includeDuplicates) and.push({ duplicateOfId: null });
   if (!f.includeExpired) and.push({ OR: [{ deadlineAt: null }, { deadlineAt: { gte: now } }] });
   if (!f.includeClosed) and.push({ noticeState: { in: ["ACTIVE", "MODIFIED"] } });
+  if (f.awardCriteria) and.push({ id: { in: await buyerScoredIds(orgId) } });
   if (f.country) and.push({ buyerCountry: f.country.toUpperCase() });
   if (f.region) and.push({ region: { startsWith: f.region } });
   if (f.cpv) and.push({ cpvCodes: { hasSome: [f.cpv] } });

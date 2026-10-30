@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bookmark, ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { Bookmark, ChevronLeft, ChevronRight, Plus, Send, Trash2 } from "lucide-react";
 import { DeadlineBadge, NoticeStateBadge, RecommendationBadge, ScorePill, StatusBadge } from "@/components/badges";
 import { ActionForm, SubmitButton } from "@/components/form";
 import { SortTh } from "@/components/sortable";
@@ -7,9 +7,12 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge, Card, CardContent, EmptyState, Field, Input, PageHeader, Select, Table, Td, Textarea } from "@/components/ui/primitives";
 import { fr } from "@/i18n/fr";
 import { formatDate, formatEur } from "@/lib/utils";
+import { PRE_APPLICATION_STATUSES } from "@/server/applications/pieces";
 import { requireContext } from "@/server/auth/context";
+import { hasRole } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
 import { DEFAULT_DIR, parseSearchParams, searchTenders } from "@/server/tenders/search";
+import { applyAction } from "./[id]/actions";
 import { createManualTenderAction, deleteSearchAction, saveSearchAction } from "./actions";
 
 export const metadata = { title: "Explorer les appels d'offres" };
@@ -19,6 +22,7 @@ type SP = Promise<Record<string, string | string[] | undefined>>;
 export default async function TendersPage({ searchParams }: { searchParams: SP }) {
   const ctx = await requireContext();
   const sp = await searchParams;
+  const canEdit = hasRole(ctx.role, "MEMBER");
   const filters = parseSearchParams(sp);
   const [res, saved] = await Promise.all([
     searchTenders(ctx.orgId, filters),
@@ -34,7 +38,7 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
   const sortKey = filters.sort ?? (filters.q ? "relevance" : "published");
   const sort = { key: sortKey, dir: filters.dir ?? DEFAULT_DIR[sortKey] };
   const d = (x?: Date) => (x ? x.toISOString().slice(0, 10) : "");
-  const advancedOpen = ["minBudget", "maxBudget", "publishedFrom", "deadlineFrom", "deadlineTo", "minScore", "cpv", "contractType", "procedureType", "maxDurationMonths", "includeExpired", "includeClosed", "includeDuplicates"].some((k) => !!sp[k]);
+  const advancedOpen = ["minBudget", "maxBudget", "publishedFrom", "deadlineFrom", "deadlineTo", "minScore", "cpv", "contractType", "procedureType", "maxDurationMonths", "includeExpired", "includeClosed", "includeDuplicates", "awardCriteria"].some((k) => !!sp[k]);
 
   return (
     <>
@@ -111,6 +115,7 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
               <label className="flex items-center gap-2"><input type="checkbox" name="includeExpired" value="1" defaultChecked={filters.includeExpired} /> Inclure les échéances passées</label>
               <label className="flex items-center gap-2"><input type="checkbox" name="includeClosed" value="1" defaultChecked={filters.includeClosed} /> Inclure annulés / attribués</label>
               <label className="flex items-center gap-2"><input type="checkbox" name="includeDuplicates" value="1" defaultChecked={filters.includeDuplicates} /> Afficher les doublons inter-sources</label>
+              <label className="flex items-center gap-2"><input type="checkbox" name="awardCriteria" value="1" defaultChecked={filters.awardCriteria} /> Avec critères de notation de l&apos;acheteur</label>
             </div>
               </div>
             </details>
@@ -182,7 +187,17 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
                     <Td className="whitespace-nowrap">
                       <div className="flex flex-col gap-0.5"><span>{formatDate(t.deadlineAt)}</span><DeadlineBadge deadline={t.deadlineAt} /></div>
                     </Td>
-                    <Td><StatusBadge status={t.status} /></Td>
+                    <Td>
+                      <div className="flex flex-col items-start gap-1.5">
+                        <StatusBadge status={t.status} />
+                        {canEdit && PRE_APPLICATION_STATUSES.includes(t.status) && (
+                          <ActionForm action={applyAction}>
+                            <input type="hidden" name="tenderId" value={t.id} />
+                            <SubmitButton size="sm" variant="outline" className="h-7 px-2 text-xs" pendingText="…"><Send /> Candidater</SubmitButton>
+                          </ActionForm>
+                        )}
+                      </div>
+                    </Td>
                   </tr>
                 );
               })}

@@ -6,6 +6,7 @@ import { z } from "zod/v4";
 import type { ActionState } from "@/components/form";
 import { runAction } from "@/server/actions";
 import { requestAnalysis } from "@/server/analysis/analysis-service";
+import { addCustomPiece, deleteCustomPiece, generateApplicationPieces, startApplication, updatePiece } from "@/server/applications/application-service";
 import { audit } from "@/server/audit";
 import { requireContext } from "@/server/auth/context";
 import { NotFoundError } from "@/server/auth/rbac";
@@ -17,6 +18,8 @@ import { computeAndStoreScore } from "@/server/scoring/score-service";
 
 const Id = z.string().min(1).max(40);
 const Status = z.enum(["DETECTED", "TO_ANALYZE", "QUALIFIED", "GO", "NO_GO", "IN_PREPARATION", "IN_VALIDATION", "READY_TO_SUBMIT", "SUBMITTED", "AWAITING_DECISION", "WON", "LOST"]);
+const PieceStatus = z.enum(["TODO", "IN_PROGRESS", "DONE", "NOT_APPLICABLE"]);
+const PieceGroup = z.enum(["CANDIDATURE", "OFFRE"]);
 const Kind = z.enum(["RC", "CCTP", "CCAP", "AE", "BPU", "DPGF", "ANNEXE", "QR", "AVIS", "AUTRE"]);
 
 async function ownTender(orgId: string, tenderId: string) {
@@ -143,5 +146,65 @@ export async function importNoticePdfAction(_p: ActionState, fd: FormData): Prom
     await enqueue("import-notice-pdf", { orgId: ctx.orgId, tenderId, userId: ctx.userId }, { jobId: `notice-${tenderId}-${Date.now()}`, attempts: 2 });
     revalidatePath(`/tenders/${tenderId}`);
     return { ok: true, message: "Import de l'extrait de l'avis lancé." };
+  });
+}
+
+/** « Candidater » : la consultation rejoint « Mes candidatures ». */
+export async function applyAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  const res = await runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const tenderId = Id.parse(fd.get("tenderId"));
+    await startApplication(ctx.orgId, tenderId, ctx.userId);
+    revalidatePath(`/tenders/${tenderId}`);
+    revalidatePath("/pipeline");
+    return { ok: true };
+  });
+  if (res?.ok) redirect("/pipeline?tab=en-cours");
+  return res;
+}
+
+export async function generateApplicationAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const tenderId = Id.parse(fd.get("tenderId"));
+    const r = await generateApplicationPieces(ctx.orgId, tenderId, ctx.userId);
+    revalidatePath(`/tenders/${tenderId}`);
+    const added = r.created ? `${r.created} pièce(s) ajoutée(s).` : "Liste à jour.";
+    return { ok: true, message: r.withAnalysis ? added : `${added} Sans analyse du DCE : pièces usuelles uniquement.` };
+  });
+}
+
+export async function updatePieceAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const id = Id.parse(fd.get("pieceId"));
+    const status = PieceStatus.parse(fd.get("status"));
+    const note = z.string().trim().max(1000).parse(fd.get("note") ?? "");
+    const p = await updatePiece(ctx.orgId, id, ctx.userId, { status, note });
+    revalidatePath(`/tenders/${p.tenderId}`);
+    revalidatePath("/pipeline");
+    return { ok: true };
+  });
+}
+
+export async function addPieceAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const tenderId = Id.parse(fd.get("tenderId"));
+    const label = z.string().trim().min(1, "Intitulé vide").max(250).parse(fd.get("label"));
+    const group = PieceGroup.parse(fd.get("group"));
+    await addCustomPiece(ctx.orgId, tenderId, ctx.userId, { label, group });
+    revalidatePath(`/tenders/${tenderId}`);
+    return { ok: true };
+  });
+}
+
+export async function deletePieceAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const id = Id.parse(fd.get("pieceId"));
+    const p = await deleteCustomPiece(ctx.orgId, id);
+    revalidatePath(`/tenders/${p.tenderId}`);
+    return { ok: true };
   });
 }

@@ -7,6 +7,7 @@ import { splitList } from "@/lib/utils";
 import { formObject, runAction } from "@/server/actions";
 import { audit } from "@/server/audit";
 import { requireContext } from "@/server/auth/context";
+import { deleteCompanyDocument } from "@/server/company/company-document-service";
 import { prisma } from "@/server/db";
 import { computePreScore } from "@/server/scoring/prescore";
 
@@ -117,6 +118,15 @@ export async function deleteReferenceAction(_p: ActionState, fd: FormData): Prom
     const id = z.string().min(1).parse(fd.get("id"));
     const res = await prisma.companyReference.deleteMany({ where: { id, organizationId: ctx.orgId } });
     if (res.count) await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "reference.deleted", entityType: "CompanyReference", entityId: id });
+    revalidatePath("/company");
+    return { ok: true };
+  });
+}
+
+export async function deleteCompanyDocumentAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    await deleteCompanyDocument(ctx.orgId, z.string().min(1).max(40).parse(fd.get("id")), ctx.userId);
     revalidatePath("/company");
     return { ok: true };
   });

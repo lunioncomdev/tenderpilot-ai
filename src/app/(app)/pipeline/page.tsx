@@ -5,6 +5,7 @@ import { parseSort, SortTh, sortRows } from "@/components/sortable";
 import { Card, EmptyState, PageHeader, Table, Td } from "@/components/ui/primitives";
 import { PIPELINE_ORDER } from "@/i18n/fr";
 import { cn, formatDate, formatEur } from "@/lib/utils";
+import { pieceProgress } from "@/server/applications/pieces";
 import { requireContext } from "@/server/auth/context";
 import { prisma } from "@/server/db";
 
@@ -20,7 +21,7 @@ const TABS = {
 type TabKey = keyof typeof TABS;
 const TAB_ORDER: TabKey[] = ["en-cours", "qualifier", "deposees", "terminees"];
 
-const SORT_KEYS = ["deadline", "title", "status", "score", "memoire", "conformite", "value", "assignee"] as const;
+const SORT_KEYS = ["deadline", "title", "status", "score", "dossier", "memoire", "conformite", "value", "assignee"] as const;
 
 export default async function PipelinePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const ctx = await requireContext();
@@ -42,6 +43,7 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
         id: true, title: true, buyerName: true, deadlineAt: true, status: true, preScore: true,
         estimatedValue: true, currency: true,
         assignee: { select: { name: true } },
+        pieces: { select: { status: true } },
         scores: { orderBy: { createdAt: "desc" }, take: 1, select: { total: true, recommendation: true } },
         proposals: {
           orderBy: { createdAt: "desc" },
@@ -58,6 +60,10 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
     title: (t) => t.title,
     status: (t) => PIPELINE_ORDER.indexOf(t.status),
     score: (t) => t.scores[0]?.total ?? t.preScore,
+    dossier: (t) => {
+      const p = pieceProgress(t.pieces);
+      return p.total ? p.done / p.total : null;
+    },
     memoire: (t) => ratio(t.proposals[0]?.sections, "VALIDATED"),
     conformite: (t) => ratio(t.proposals[0]?.compliance, "COMPLIANT"),
     value: (t) => (t.estimatedValue === null ? null : Number(t.estimatedValue)),
@@ -73,7 +79,7 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
     <>
       <PageHeader
         title="Mes candidatures"
-        description="Candidatures triées par date limite. Changez le statut depuis la fiche de chaque appel d'offres ; les avis simplement détectés restent dans « Explorer »."
+        description="Candidatures triées par date limite. Cliquez « Candidater » sur un appel d'offres pour le suivre ici, puis générez son dossier de candidature depuis sa fiche."
         actions={
           <div className="flex gap-2 text-sm">
             <Link href={toggleMine()} className={!mine ? "font-semibold text-primary" : "text-muted-foreground hover:underline"}>Tous</Link>
@@ -103,7 +109,7 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
       {tenders.length === 0 ? (
         <EmptyState title="Aucune candidature à cette étape">
           {tab === "en-cours"
-            ? "Passez un appel d'offres « En préparation » depuis sa fiche pour le suivre ici."
+            ? "Cliquez « Candidater » sur un appel d'offres (Explorer ou sa fiche) pour le suivre ici."
             : <>Les appels d&apos;offres se trouvent dans <Link className="text-primary underline" href="/tenders">Explorer</Link>.</>}
         </EmptyState>
       ) : (
@@ -118,6 +124,7 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
                   <SortTh label="Score" column="score" sort={sort} params={sp} firstDir="desc" />
                 ) : tab === "en-cours" ? (
                   <>
+                    <SortTh label="Dossier" column="dossier" sort={sort} params={sp} firstDir="desc" />
                     <SortTh label="Mémoire" column="memoire" sort={sort} params={sp} firstDir="desc" />
                     <SortTh label="Conformité" column="conformite" sort={sort} params={sp} firstDir="desc" />
                   </>
@@ -154,6 +161,13 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
                     ) : tab === "en-cours" ? (
                       <>
                         <Td>
+                          {t.pieces.length ? (
+                            <Progress {...pieceProgress(t.pieces)} unit="pièces prêtes" />
+                          ) : (
+                            <Link href={`/tenders/${t.id}`} className="text-xs text-primary hover:underline">Générer le dossier</Link>
+                          )}
+                        </Td>
+                        <Td>
                           {proposal?.sections.length ? (
                             <Progress done={proposal.sections.filter((s) => s.status === "VALIDATED").length} total={proposal.sections.length} unit="validées" />
                           ) : (
@@ -184,7 +198,7 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
 }
 
 function Progress({ done, total, unit }: { done: number; total: number; unit: string }) {
-  const pct = Math.round((done / total) * 100);
+  const pct = total ? Math.round((done / total) * 100) : 0;
   return (
     <div className="flex min-w-32 flex-col gap-1" title={`${done} / ${total} ${unit}`}>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">

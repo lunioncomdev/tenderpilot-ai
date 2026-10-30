@@ -4,6 +4,7 @@ import { audit } from "../audit";
 import { prisma } from "../db";
 import { env } from "../env";
 import { assertAiAllowed, callStructured } from "../ai/gateway";
+import { systemWithRules } from "../ai/rules";
 import {
   GENERATE_SECTION_PROMPT_VERSION,
   GENERATE_SECTION_SYSTEM,
@@ -144,7 +145,7 @@ export async function generateSection(orgId: string, sectionId: string, instruct
       {
         operation: "generate_section",
         promptVersion: GENERATE_SECTION_PROMPT_VERSION,
-        system: GENERATE_SECTION_SYSTEM,
+        system: systemWithRules(GENERATE_SECTION_SYSTEM, profile?.aiRules, "section"),
         context: ctx.text,
         prompt: generateSectionPrompt({
           sectionTitle: section.title,

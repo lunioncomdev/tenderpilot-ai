@@ -33,6 +33,7 @@ model Organization {
   memberships   Membership[]
   profile       CompanyProfile?
   references    CompanyReference[]
+  companyDocs   CompanyDocument[]
   sources       SourceConfig[]
   syncRuns      SyncRun[]
   tenders       Tender[]
@@ -41,6 +42,7 @@ model Organization {
   analyses      TenderAnalysis[]
   scores        TenderScore[]
   proposals     Proposal[]
+  pieces        ApplicationPiece[]
   savedSearches SavedSearch[]
   comments      Comment[]
   auditLogs     AuditLog[]
@@ -114,6 +116,7 @@ model CompanyProfile {
   keywords              String[]     @default([])
   dailyRates            Json         @default("{}") // { "Chef de projet": 750, ... }
   scoringWeights        Json         @default("{}") // surcharge des pondérations
+  aiRules               Json         @default("{}") // règles de traitement IA : { common, analysis, section, compliance }
   methodology           String       @default("")
   qualityProcess        String       @default("")
   securityPolicy        String       @default("")
@@ -143,6 +146,41 @@ model CompanyReference {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+}
+
+enum CompanyDocType {
+  KBIS
+  URSSAF
+  FISCALE
+  ASSURANCE_RC
+  RIB
+  DC2
+  BILANS
+  REFERENCES
+  CERTIFICATION
+  POUVOIR
+  AUTRE
+}
+
+/** Pièce administrative de l'entreprise, réutilisée dans les dossiers de candidature. */
+model CompanyDocument {
+  id             String         @id @default(cuid())
+  organizationId String
+  type           CompanyDocType
+  label          String
+  filename       String
+  mimeType       String
+  sizeBytes      Int
+  sha256         String
+  storageKey     String
+  issuedAt       DateTime? // date de délivrance
+  validUntil     DateTime? // fin de validité (null = sans échéance)
+  uploadedById   String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, type])
 }
 
 // ───────────────────────────── Veille ─────────────────────────────
@@ -264,6 +302,7 @@ model Tender {
   analyses     TenderAnalysis[]
   scores       TenderScore[]
   proposals    Proposal[]
+  pieces       ApplicationPiece[]
   comments     Comment[]
 
   @@unique([organizationId, origin, externalId])
@@ -527,6 +566,44 @@ model ComplianceItem {
   proposal    Proposal         @relation(fields: [proposalId], references: [id], onDelete: Cascade)
 
   @@index([proposalId])
+}
+
+// ───────────────────────────── Dossier de candidature ─────────────────────────────
+
+enum PieceGroup {
+  CANDIDATURE // pièces administratives (DC1, DC2, attestations…)
+  OFFRE // pièces de l'offre (AE, BPU, mémoire…)
+}
+
+enum PieceStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  NOT_APPLICABLE
+}
+
+/** Pièce à réunir pour déposer la candidature, avec son état d'avancement. */
+model ApplicationPiece {
+  id             String       @id @default(cuid())
+  organizationId String
+  tenderId       String
+  key            String // clé de la pièce usuelle (« dc1 », « memoire »…) ou « dce-<n> » / « custom-<id> »
+  group          PieceGroup
+  order          Int
+  label          String
+  detail         String       @default("") // exigence telle que formulée dans le DCE
+  source         String       @default("") // référence documentaire
+  fromDce        Boolean      @default(false)
+  status         PieceStatus  @default(TODO)
+  note           String       @default("")
+  updatedById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tender         Tender       @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  @@unique([tenderId, key])
+  @@index([organizationId, tenderId])
 }
 
 // ───────────────────────────── Collaboration ─────────────────────────────
