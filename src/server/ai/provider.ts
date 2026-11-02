@@ -47,10 +47,22 @@ const PRICING: Record<string, { input: number; output: number; cacheRead: number
   "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5 },
   "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2 },
   "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01 },
+  // OpenAI : vérifier les tarifs du modèle choisi sur https://openai.com/api/pricing
+  "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125 },
 };
 
+/** Tarif d'un modèle ; les variantes datées (ex. « gpt-5.5-2026-… ») retombent sur leur famille. */
+function pricingFor(model: string) {
+  if (PRICING[model]) return PRICING[model];
+  const prefix = Object.keys(PRICING)
+    .filter((k) => model.startsWith(k))
+    .sort((a, b) => b.length - a.length)[0];
+  if (prefix) return PRICING[prefix];
+  return model.startsWith("gpt-") ? PRICING["gpt-5"] : PRICING["claude-opus-5-5"];
+}
+
 export function estimateCostUsd(model: string, u: LlmUsage): number {
-  const p = PRICING[model] ?? PRICING["claude-opus-5-5"];
+  const p = pricingFor(model);
   const cost =
     (u.inputTokens * p.input + u.cacheWriteTokens * p.input * 1.25 + u.cacheReadTokens * p.cacheRead + u.outputTokens * p.output) /
     1_000_000;

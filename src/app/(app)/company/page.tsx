@@ -216,12 +216,12 @@ export default async function CompanyPage() {
           <Card>
             <CardHeader>
               <CardTitle>Confidentialité et IA</CardTitle>
-              <CardDescription>Contrôle l&apos;envoi des documents de consultation au fournisseur d&apos;IA (Anthropic).</CardDescription>
+              <CardDescription>Contrôle l&apos;envoi des documents de consultation au fournisseur d&apos;IA (OpenAI).</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               <Alert tone={p?.allowAiDocumentUpload ? "success" : "warning"}>
                 {p?.allowAiDocumentUpload
-                  ? "Autorisé : les DCE importés et les données du profil peuvent être transmis à l'API Claude lors d'une analyse ou d'une génération déclenchée manuellement."
+                  ? "Autorisé : les DCE importés et les données du profil peuvent être transmis à l'API OpenAI lors d'une analyse ou d'une génération déclenchée manuellement."
                   : "Désactivé : aucune analyse IA ni génération de mémoire n'est possible."}
               </Alert>
               <ActionForm action={savePrivacyAction} className="flex flex-col gap-3">

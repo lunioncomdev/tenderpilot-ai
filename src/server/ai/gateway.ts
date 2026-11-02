@@ -3,6 +3,7 @@ import { prisma } from "../db";
 import { env } from "../env";
 import { logger } from "../logger";
 import { AnthropicProvider } from "./anthropic";
+import { OpenAIProvider } from "./openai";
 import { estimateCostUsd, LlmError, type LlmProvider, type StructuredRequest, type StructuredResponse } from "./provider";
 
 /** Quotas mensuels d'opérations IA par offre (préparation de la commercialisation). */
@@ -30,15 +31,26 @@ export function getProvider(): LlmProvider {
   if (override) return override;
   const e = env();
   if (!e.AI_ENABLED) throw new AiNotAllowedError("L'IA est désactivée (AI_ENABLED=false)");
-  if (!e.ANTHROPIC_API_KEY) throw new AiNotAllowedError("Clé ANTHROPIC_API_KEY absente");
-  return new AnthropicProvider(e.ANTHROPIC_API_KEY, e.AI_MODEL, e.AI_EFFORT);
+  const key = apiKey();
+  if (!key) throw new AiNotAllowedError(`Clé ${apiKeyName()} absente`);
+  return e.AI_PROVIDER === "openai"
+    ? new OpenAIProvider(key, e.AI_MODEL, e.AI_EFFORT)
+    : new AnthropicProvider(key, e.AI_MODEL, e.AI_EFFORT);
+}
+
+function apiKeyName(): "OPENAI_API_KEY" | "ANTHROPIC_API_KEY" {
+  return env().AI_PROVIDER === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+}
+
+function apiKey(): string | undefined {
+  return env()[apiKeyName()];
 }
 
 export function aiStatus(): { enabled: boolean; reason?: string; model: string } {
   const e = env();
   if (override) return { enabled: true, model: override.model };
   if (!e.AI_ENABLED) return { enabled: false, reason: "IA désactivée (AI_ENABLED=false)", model: e.AI_MODEL };
-  if (!e.ANTHROPIC_API_KEY) return { enabled: false, reason: "Clé ANTHROPIC_API_KEY absente", model: e.AI_MODEL };
+  if (!apiKey()) return { enabled: false, reason: `Clé ${apiKeyName()} absente`, model: e.AI_MODEL };
   return { enabled: true, model: e.AI_MODEL };
 }
 

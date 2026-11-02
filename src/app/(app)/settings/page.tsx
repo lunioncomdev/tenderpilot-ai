@@ -73,7 +73,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         <Card>
           <CardHeader>
             <CardTitle>Intelligence artificielle</CardTitle>
-            <CardDescription>Fournisseur : Anthropic (Claude). Les nouveaux avis BOAMP sont analysés automatiquement après import de leur extrait ; les autres appels sont déclenchés manuellement.</CardDescription>
+            <CardDescription>Fournisseur : OpenAI. Les nouveaux avis BOAMP sont analysés automatiquement après import de leur extrait ; les autres appels sont déclenchés manuellement.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm">
             <Alert tone={ai.enabled ? "success" : "warning"}>{ai.enabled ? `Active — modèle ${ai.model}, effort ${env().AI_EFFORT}.` : `Inactive : ${ai.reason}.`}</Alert>

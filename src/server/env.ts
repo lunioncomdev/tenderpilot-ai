@@ -24,9 +24,10 @@ const EnvSchema = z.object({
   UPLOAD_MAX_MB: z.coerce.number().int().positive().default(50),
 
   AI_ENABLED: bool,
-  AI_PROVIDER: z.enum(["anthropic"]).default("anthropic"),
+  AI_PROVIDER: z.enum(["openai", "anthropic"]).default("openai"),
+  OPENAI_API_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
-  AI_MODEL: z.string().default("claude-opus-5-5"),
+  AI_MODEL: z.string().default("gpt-5.5"),
   AI_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("high"),
   AI_MONTHLY_BUDGET_USD: z.coerce.number().nonnegative().default(200),
   AI_MAX_DCE_TOKENS: z.coerce.number().int().positive().default(400_000),
