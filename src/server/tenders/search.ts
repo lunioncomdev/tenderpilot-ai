@@ -139,6 +139,30 @@ export async function searchTenders(orgId: string, input: SearchFilters, now = n
     return { items: pageIds.map((id) => byId.get(id)!).filter(Boolean), total: ordered.length, page: f.page, pageSize: PAGE_SIZE, filters: f };
   }
 
+  // Tri sur le score affiché : score complet le plus récent, sinon pré-score
+  // (non exprimable en orderBy Prisma, d'où le tri en mémoire des identifiants).
+  if (sort === "score") {
+    const all = await prisma.tender.findMany({
+      where,
+      select: { id: true, preScore: true, scores: { orderBy: { createdAt: "desc" }, take: 1, select: { total: true } } },
+    });
+    const value = (t: (typeof all)[number]) => t.scores[0]?.total ?? t.preScore;
+    const sign = dir === "asc" ? 1 : -1;
+    const ordered = all
+      .sort((a, b) => {
+        const x = value(a);
+        const y = value(b);
+        if (x === null) return y === null ? a.id.localeCompare(b.id) : 1;
+        if (y === null) return -1;
+        return sign * (x - y) || a.id.localeCompare(b.id);
+      })
+      .map((t) => t.id);
+    const pageIds = ordered.slice((f.page - 1) * PAGE_SIZE, f.page * PAGE_SIZE);
+    const rows = await prisma.tender.findMany({ where: { id: { in: pageIds } }, select });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return { items: pageIds.map((id) => byId.get(id)!).filter(Boolean), total: ordered.length, page: f.page, pageSize: PAGE_SIZE, filters: f };
+  }
+
   const [items, total] = await Promise.all([
     prisma.tender.findMany({ where, orderBy, skip: (f.page - 1) * PAGE_SIZE, take: PAGE_SIZE, select }),
     prisma.tender.count({ where }),
