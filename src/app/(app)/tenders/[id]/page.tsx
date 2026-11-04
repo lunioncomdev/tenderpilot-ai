@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Briefcase, ClipboardList, Download, ExternalLink, FileText, RefreshCw, Send, Sparkles, Trash2 } from "lucide-react";
+import { Briefcase, Calculator, ClipboardList, Download, ExternalLink, FileText, RefreshCw, Send, Sparkles, Trash2 } from "lucide-react";
 import { DeadlineBadge, NoticeStateBadge, RecommendationBadge, ScorePill, StatusBadge } from "@/components/badges";
 import { AutoRefresh, UploadDocuments } from "@/components/client-utils";
 import { ActionForm, SubmitButton } from "@/components/form";
@@ -9,6 +9,8 @@ import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle
 import { fr } from "@/i18n/fr";
 import { formatDate, formatDateTime, formatEur, NOT_SPECIFIED } from "@/lib/utils";
 import { aiStatus } from "@/server/ai/gateway";
+import { compareLotNumbers, lotLabel, visiblePieces } from "@/server/applications/lots";
+import { loadReadiness } from "@/server/applications/readiness";
 import { APPLICATION_STATUSES, pieceProgress, PRE_APPLICATION_STATUSES } from "@/server/applications/pieces";
 import { boampNoticePdfUrl } from "@/server/connectors/boamp";
 import type { TenderAnalysisResult } from "@/server/analysis/schema";
@@ -16,12 +18,18 @@ import { requireContext } from "@/server/auth/context";
 import { linkCompanyDocs } from "@/server/company/documents";
 import { hasRole } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
+import { detectPlatform } from "@/server/dce/platforms";
+import { settingsProblem } from "@/server/dce/retrieve-service";
 import { env } from "@/server/env";
+import { loadPricing, priceTemplates } from "@/server/pricing/pricing-service";
 import { LEVEL_LABELS, scoreLevel, type CriterionResult, type EliminatoryCheck } from "@/server/scoring/engine";
 import { AnalysisView } from "./analysis-view";
 import { ApplicationPieces } from "./application-pieces";
+import { LotSelector } from "./lot-selector";
+import { ReadinessPanel } from "./readiness-panel";
 import {
-  addCommentAction, applyAction, createProposalAction, deleteDocumentAction, generateApplicationAction, importNoticePdfAction, recomputeScoreAction,
+  preparePricingAction,
+  addCommentAction, applyAction, retrieveDceAction, createProposalAction, deleteDocumentAction, generateApplicationAction, importNoticePdfAction, recomputeScoreAction,
   reprocessDocumentAction, requestAnalysisAction, setDocumentKindAction, updateWorkflowAction,
 } from "./actions";
 
@@ -44,31 +52,60 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
       documents: { orderBy: { createdAt: "asc" } },
       analyses: { orderBy: { createdAt: "desc" }, take: 1 },
       scores: { orderBy: { createdAt: "desc" }, take: 1 },
-      proposals: { select: { id: true, title: true, status: true } },
-      pieces: { orderBy: [{ order: "asc" }, { createdAt: "asc" }] },
+      proposals: { select: { id: true, title: true, status: true, lotId: true }, orderBy: { createdAt: "asc" } },
+      lots: true,
+      pieces: {
+        orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+        include: { files: { orderBy: { createdAt: "asc" }, select: { id: true, filename: true, sizeBytes: true } } },
+      },
       comments: { orderBy: { createdAt: "asc" }, include: { author: { select: { name: true } } } },
       duplicateOf: { select: { id: true, title: true, origin: true } },
       duplicates: { select: { id: true, origin: true, publicationRef: true } },
     },
   });
   if (!tender) notFound();
-  const [members, history, companyDocs] = await Promise.all([
+  const [members, history, companyDocs, dceSettings] = await Promise.all([
     prisma.membership.findMany({ where: { organizationId: ctx.orgId }, include: { user: { select: { id: true, name: true } } } }),
     prisma.auditLog.findMany({ where: { organizationId: ctx.orgId, entityType: "Tender", entityId: tender.id }, orderBy: { createdAt: "desc" }, take: 15, include: { user: { select: { name: true } } } }),
     prisma.companyDocument.findMany({ where: { organizationId: ctx.orgId }, orderBy: { createdAt: "desc" }, select: { id: true, type: true, label: true, filename: true, validUntil: true } }),
+    prisma.dceRetrievalSettings.findUnique({ where: { organizationId: ctx.orgId } }),
   ]);
+  const templates = await priceTemplates(ctx.orgId, tender.id);
+  const pricingRows = await prisma.pricing.findMany({ where: { tenderId: tender.id, organizationId: ctx.orgId }, select: { id: true, documentId: true, lotId: true } });
+  const pricings = new Map(
+    await Promise.all(pricingRows.map(async (p) => [p.documentId, { id: p.id, lotId: p.lotId, totals: (await loadPricing(ctx.orgId, p.id)).totals }] as const)),
+  );
+  const platform = detectPlatform(tender.documentsUrl);
+  const dceProblem = settingsProblem(dceSettings);
+  const platformAccount = platform.kind === "account" || platform.kind === "generic"
+    ? await prisma.platformAccount.findUnique({ where: { organizationId_host: { organizationId: ctx.orgId, host: platform.host } }, select: { login: true } })
+    : null;
 
   const analysis = tender.analyses[0];
   const score = tender.scores[0];
   const canEdit = hasRole(ctx.role, "MEMBER");
-  const ai = aiStatus();
+  const ai = await aiStatus(ctx.orgId);
   const extracted = tender.documents.filter((d) => d.status === "EXTRACTED" && !d.mimeType.includes("zip")).length;
   const canApply = PRE_APPLICATION_STATUSES.includes(tender.status);
   const inApplication = APPLICATION_STATUSES.includes(tender.status);
-  const progress = pieceProgress(tender.pieces);
-  const pieceViews = tender.pieces.map(({ id, key, group, label, detail, source, fromDce, status, note }) => ({
-    id, key, group, label, detail, source, fromDce, status, note, profile: linkCompanyDocs({ key, detail }, companyDocs, tender.deadlineAt),
+  const lots = [...tender.lots].sort((a, b) => compareLotNumbers(a.number, b.number));
+  const selectedLots = lots.filter((l) => l.selected);
+  const pieces = visiblePieces(tender.pieces, selectedLots.map((l) => l.id));
+  const hiddenLotPieces = tender.pieces.filter((p) => p.lotId && !selectedLots.some((l) => l.id === p.lotId)).length;
+  const progress = pieceProgress(pieces);
+  const pieceViews = pieces.map(({ id, key, group, label, detail, source, fromDce, status, note, files, lotId }) => ({
+    id, key, group, label, detail, source, fromDce, status, note, files, lotId, profile: linkCompanyDocs({ key, detail }, companyDocs, tender.deadlineAt),
   }));
+  const proposalFor = (lotId: string | null) => tender.proposals.find((p) => p.lotId === lotId)?.id;
+  const canCreateProposal = canEdit && analysis?.status === "DONE";
+  const pieceSections = [
+    { key: "candidature", title: fr.pieceGroup.CANDIDATURE, group: "CANDIDATURE" as const, lotId: null, proposalId: undefined },
+    { key: "offre", title: selectedLots.length ? `${fr.pieceGroup.OFFRE} — pièces communes à tous les lots` : fr.pieceGroup.OFFRE, group: "OFFRE" as const, lotId: null, proposalId: proposalFor(null) },
+    ...selectedLots.map((l) => ({ key: l.id, title: `${fr.pieceGroup.OFFRE} — ${lotLabel(l)}`, group: "OFFRE" as const, lotId: l.id, proposalId: proposalFor(l.id) })),
+  ];
+  const lotNumber = new Map(lots.map((l) => [l.id, l.number]));
+  const readiness = inApplication || tender.pieces.length ? await loadReadiness(ctx.orgId, tender.id) : null;
+  const isAdmin = hasRole(ctx.role, "ADMIN");
   // Pièces requises dont la pièce du profil manque, est expirée ou expire avant la date limite.
   const docIssues = pieceViews.filter((p) => p.status !== "NOT_APPLICABLE" && p.profile && (p.profile.missing.length > 0 || p.profile.docs.some((d) => d.alert === "expired" || d.alert === "before-deadline")));
   const processing = tender.documents.some((d) => d.status === "UPLOADED" || d.status === "PROCESSING") || analysis?.status === "PENDING" || analysis?.status === "RUNNING";
@@ -109,18 +146,25 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
       <div className="grid gap-6 xl:grid-cols-3">
         <div className="flex flex-col gap-6 xl:col-span-2">
           {(inApplication || tender.pieces.length > 0) && (
-            <Card>
+            <Card id="dossier" className="scroll-mt-20">
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <CardTitle>Dossier de candidature</CardTitle>
-                  {canEdit && (
-                    <ActionForm action={generateApplicationAction}>
-                      <input type="hidden" name="tenderId" value={tender.id} />
-                      <SubmitButton size="sm" variant={tender.pieces.length ? "outline" : "default"} pendingText="Génération…">
-                        <ClipboardList /> {tender.pieces.length ? "Mettre à jour depuis l'analyse" : "Générer le dossier de candidature"}
-                      </SubmitButton>
-                    </ActionForm>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {canEdit && (
+                      <ActionForm action={generateApplicationAction}>
+                        <input type="hidden" name="tenderId" value={tender.id} />
+                        <SubmitButton size="sm" variant={tender.pieces.length ? "outline" : "default"} pendingText="Génération…">
+                          <ClipboardList /> {tender.pieces.length ? "Mettre à jour depuis l'analyse" : "Générer le dossier de candidature"}
+                        </SubmitButton>
+                      </ActionForm>
+                    )}
+                    {tender.pieces.length > 0 && (
+                      <a className={buttonVariants({ size: "sm" })} href={`/api/v1/tenders/${tender.id}/dossier`} download>
+                        <Download /> Télécharger le dossier (ZIP)
+                      </a>
+                    )}
+                  </div>
                 </div>
                 <CardDescription>
                   {tender.pieces.length === 0
@@ -130,6 +174,16 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                     : `${progress.done} / ${progress.total} pièce(s) prête(s). Les pièces « Non requises » ne comptent pas.`}
                 </CardDescription>
               </CardHeader>
+              {(lots.length > 0 || canEdit) && (
+                <CardContent className={tender.pieces.length ? "pb-0" : undefined}>
+                  <LotSelector
+                    tenderId={tender.id}
+                    canEdit={canEdit}
+                    hiddenPieces={hiddenLotPieces}
+                    lots={lots.map((l) => ({ id: l.id, number: l.number, title: l.title, selected: l.selected, fromAnalysis: l.fromAnalysis }))}
+                  />
+                </CardContent>
+              )}
               {tender.pieces.length > 0 && (
                 <CardContent className="flex flex-col gap-4">
                   <div className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={progress.done} aria-valuemax={progress.total} aria-label="Avancement du dossier">
@@ -140,9 +194,59 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                       {docIssues.length} pièce(s) à compléter ou mettre à jour dans le <Link href="/company#pieces" className="underline">profil entreprise</Link> : {docIssues.map((p) => p.label).join(", ")}.
                     </Alert>
                   )}
-                  <ApplicationPieces tenderId={tender.id} canEdit={canEdit} proposalId={tender.proposals[0]?.id} pieces={pieceViews} />
+                  <ApplicationPieces tenderId={tender.id} canEdit={canEdit} canCreateProposal={canCreateProposal} sections={pieceSections} pieces={pieceViews} maxMb={env().UPLOAD_MAX_MB} />
                 </CardContent>
               )}
+            </Card>
+          )}
+
+          {(inApplication || templates.length > 0) && (
+            <Card id="chiffrage" className="scroll-mt-20">
+              <CardHeader>
+                <CardTitle>Chiffrage</CardTitle>
+                <CardDescription>
+                  Bordereaux de prix du DCE (BPU, DPGF, DQE au format .xlsx) remplis à partir des jours par profil et des TJM du profil entreprise. Le modèle de l&apos;acheteur est conservé.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {templates.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Aucun classeur .xlsx dans le DCE. Importez le BPU ou la DPGF au format Excel dans les documents ci-dessous.</p>
+                ) : (
+                  <ul className="divide-y rounded-lg border text-sm">
+                    {templates.map((d) => {
+                      const pr = pricings.get(d.id);
+                      return (
+                        <li key={d.id} className="flex flex-wrap items-center gap-3 p-3">
+                          <Calculator className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-medium">
+                              {d.filename} <Badge className="ml-1 align-middle">{fr.documentKind[d.kind]}</Badge>
+                              {pr?.lotId && lotNumber.has(pr.lotId) && <Badge tone="primary" className="ml-1 align-middle">Lot {lotNumber.get(pr.lotId)}</Badge>}
+                            </p>
+                            {pr && (
+                              <p className="text-xs text-muted-foreground">
+                                {pr.totals.priced} / {pr.totals.lines} ligne(s) chiffrée(s){pr.totals.totalHt > 0 ? ` — total ${formatEur(pr.totals.totalHt)} HT` : ""}
+                              </p>
+                            )}
+                          </div>
+                          {pr ? (
+                            <div className="flex items-center gap-2">
+                              <Link className={buttonVariants({ size: "sm", variant: "outline" })} href={`/tenders/${tender.id}/pricing/${pr.id}`}>Ouvrir le chiffrage</Link>
+                              <a className={buttonVariants({ size: "sm", variant: "ghost" })} href={`/api/v1/pricings/${pr.id}/export`} download aria-label="Télécharger le bordereau rempli"><Download /></a>
+                            </div>
+                          ) : canEdit ? (
+                            <ActionForm action={preparePricingAction}>
+                              <input type="hidden" name="tenderId" value={tender.id} />
+                              <input type="hidden" name="documentId" value={d.id} />
+                              <SubmitButton size="sm" variant="outline" pendingText="Analyse du bordereau…"><Calculator /> Chiffrer ce bordereau</SubmitButton>
+                            </ActionForm>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </CardContent>
             </Card>
           )}
 
@@ -172,10 +276,35 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
             <CardHeader>
               <CardTitle>Dossier de consultation (DCE)</CardTitle>
               <CardDescription>
-                Le dossier de consultation se télécharge sur la plateforme de l&apos;acheteur (bouton « Dossier de consultation »), qui exige généralement un compte : importez-le ensuite ici. Aucun contournement d&apos;accès n&apos;est effectué.
+                Le dossier de consultation est publié sur la plateforme de l&apos;acheteur. Sur les plateformes Atexo (PLACE, Maximilien…), il est retiré automatiquement ;
+                ailleurs, téléchargez-le (bouton « Dossier de consultation ») puis importez-le ici. Aucun contournement d&apos;accès n&apos;est effectué.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
+              {platform.kind === "atexo" && canEdit && (
+                <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {dceProblem ? (
+                      <span>Retrait automatique possible sur {platform.name}, mais {dceProblem}. <Link className="text-primary underline" href="/settings">Configurer</Link></span>
+                    ) : (
+                      <ActionForm action={retrieveDceAction}>
+                        <input type="hidden" name="tenderId" value={tender.id} />
+                        <SubmitButton size="sm" variant="secondary" pendingText="Lancement…"><Download /> Récupérer le DCE sur {platform.name}</SubmitButton>
+                      </ActionForm>
+                    )}
+                    {tender.dceFetchedAt && <span className="text-xs text-muted-foreground">Dernier retrait : {formatDateTime(tender.dceFetchedAt)}</span>}
+                  </div>
+                  {!dceProblem && <span className="text-xs text-muted-foreground">Règlement de consultation et DCE complet, retirés en mode {dceSettings?.mode === "IDENTIFIED" ? `identifié (${dceSettings.legalName})` : "anonyme"}.</span>}
+                </div>
+              )}
+              {(platform.kind === "account" || platform.kind === "generic") && (
+                <p className="rounded-lg border bg-muted/30 p-3 text-sm">
+                  DCE sur <strong>{platform.name}</strong> : retrait automatique non pris en charge.{" "}
+                  {platformAccount ? <>Compte enregistré : <strong>{platformAccount.login}</strong>.</> : platform.kind === "account" ? <>Plateforme à compte : <Link className="text-primary underline" href="/settings">enregistrez vos identifiants</Link>.</> : null}
+                </p>
+              )}
+              {platform.kind === "none" && <p className="text-sm text-muted-foreground">L&apos;avis ne donne pas de lien vers le dossier de consultation (projet d&apos;achat ou avis sans profil acheteur).</p>}
+              {tender.dceFetchError && <Alert tone="warning">Retrait du DCE : {tender.dceFetchError}</Alert>}
               {canEdit && tender.origin === "BOAMP" && !tender.documents.some((d) => d.kind === "AVIS") && (
                 <ActionForm action={importNoticePdfAction} className="flex flex-wrap items-center gap-2">
                   <input type="hidden" name="tenderId" value={tender.id} />
@@ -193,7 +322,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                         <p className="truncate font-medium">{d.filename}</p>
                         <p className="text-xs text-muted-foreground">
                           {(d.sizeBytes / 1024).toFixed(0)} Ko{d.pageCount ? ` · ${d.pageCount} ${d.mimeType.includes("zip") ? "fichier(s)" : "page(s)"}` : ""}
-                          {d.error && <span className="text-danger"> · {d.error}</span>}
+                          {d.error && <span className={d.status === "EXTRACTED" ? "text-warning" : "text-danger"}> · {d.error}</span>}
                         </p>
                       </div>
                       <Badge tone={d.status === "EXTRACTED" ? "success" : d.status === "FAILED" || d.status === "NEEDS_OCR" ? "danger" : "primary"}>{fr.documentStatus[d.status]}</Badge>
@@ -324,6 +453,8 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
             </CardContent>
           </Card>
 
+          {readiness && <ReadinessPanel tenderId={tender.id} readiness={readiness} />}
+
           <Card>
             <CardHeader><CardTitle>Workflow</CardTitle></CardHeader>
             <CardContent className="flex flex-col gap-4">
@@ -336,13 +467,38 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                   <option value="">Non affecté</option>
                   {members.map((m) => <option key={m.userId} value={m.userId}>{m.user.name}</option>)}
                 </Select>
+                {readiness && !readiness.ready && isAdmin && (
+                  <details className="rounded-md border p-2 text-xs">
+                    <summary className="cursor-pointer select-none text-muted-foreground">Déroger au contrôle avant dépôt (administrateur)</summary>
+                    <label className="mt-2 flex items-center gap-2">
+                      <input type="checkbox" name="override" />
+                      Passer « Prête à déposer » / « Déposée » malgré {readiness.blockers} point(s) bloquant(s)
+                    </label>
+                    <Textarea name="overrideReason" placeholder="Motif (ex. AE signé déposé à part sur la plateforme)" className="mt-2 min-h-14 text-xs" maxLength={1000} />
+                    <p className="mt-1 text-muted-foreground">La dérogation et son motif sont inscrits au journal d&apos;audit.</p>
+                  </details>
+                )}
                 {canEdit && <SubmitButton variant="outline" size="sm">Enregistrer</SubmitButton>}
               </ActionForm>
               <div className="border-t pt-4">
-                {tender.proposals.length ? (
-                  tender.proposals.map((p) => (
-                    <Link key={p.id} href={`/proposals/${p.id}`} className={buttonVariants({ variant: "secondary" }) + " w-full"}><FileText /> Ouvrir le mémoire technique</Link>
-                  ))
+                {selectedLots.length ? (
+                  <div className="flex flex-col gap-2">
+                    {selectedLots.map((l) => {
+                      const pid = proposalFor(l.id);
+                      return pid ? (
+                        <Link key={l.id} href={`/proposals/${pid}`} className={buttonVariants({ variant: "secondary" }) + " w-full"}><FileText /> Mémoire — lot {l.number}</Link>
+                      ) : canEdit ? (
+                        <ActionForm key={l.id} action={createProposalAction}>
+                          <input type="hidden" name="tenderId" value={tender.id} />
+                          <input type="hidden" name="lotId" value={l.id} />
+                          <SubmitButton variant="outline" className="w-full" disabled={analysis?.status !== "DONE"}><FileText /> Préparer le mémoire du lot {l.number}</SubmitButton>
+                        </ActionForm>
+                      ) : null;
+                    })}
+                    {analysis?.status !== "DONE" && canEdit && <p className="text-xs text-muted-foreground">Disponible après l&apos;analyse du DCE.</p>}
+                  </div>
+                ) : proposalFor(null) ? (
+                  <Link href={`/proposals/${proposalFor(null)}`} className={buttonVariants({ variant: "secondary" }) + " w-full"}><FileText /> Ouvrir le mémoire technique</Link>
                 ) : canEdit ? (
                   <ActionForm action={createProposalAction}>
                     <input type="hidden" name="tenderId" value={tender.id} />

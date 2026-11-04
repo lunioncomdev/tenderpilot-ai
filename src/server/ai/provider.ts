@@ -47,7 +47,16 @@ const PRICING: Record<string, { input: number; output: number; cacheRead: number
   "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5 },
   "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2 },
   "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01 },
-  // OpenAI : vérifier les tarifs du modèle choisi sur https://openai.com/api/pricing
+  // OpenAI, tarif Standard contexte court (≤ 272K tokens en entrée), relevé le 2026-11-04 sur
+  // https://developers.openai.com/api/docs/pricing — au-delà, le tarif long contexte est plus élevé (sous-estimation).
+  "gpt-6-astra": { input: 10, output: 50, cacheRead: 1 },
+  "gpt-6.1-sol": { input: 2, output: 10, cacheRead: 0.1 },
+  "gpt-6.1-terra": { input: 1, output: 5, cacheRead: 0.05 },
+  "gpt-6-luna": { input: 0.1, output: 0.5, cacheRead: 0.01 },
+  "gpt-5.6-sol": { input: 4, output: 20, cacheRead: 0.4 },
+  "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02 },
+  "gpt-5.5": { input: 5, output: 30, cacheRead: 0.5 },
   "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125 },
 };
 

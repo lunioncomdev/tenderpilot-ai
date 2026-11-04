@@ -37,11 +37,28 @@ export async function syncNowAction(_p: ActionState, fd: FormData): Promise<Acti
   return runAction(async () => {
     const ctx = await requireContext("MEMBER");
     const source = Source.parse(fd.get("source"));
+    const org = await prisma.organization.findUniqueOrThrow({ where: { id: ctx.orgId }, select: { syncPausedAt: true } });
+    if (org.syncPausedAt) return { error: "Synchronisation en pause : reprenez-la pour lancer une synchronisation." };
     const cfg = await prisma.sourceConfig.findUnique({ where: { organizationId_source: { organizationId: ctx.orgId, source } } });
     if (cfg && !cfg.enabled) return { error: "Source désactivée." };
     await enqueue("sync-source", { orgId: ctx.orgId, source, trigger: "manual" }, { jobId: `sync-${ctx.orgId}-${source}-${Date.now()}` });
     await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "source.sync_requested", entityType: "SourceConfig", entityId: source });
     revalidatePath("/sources");
     return { ok: true, message: "Synchronisation lancée. Le résultat apparaîtra dans l'historique." };
+  });
+}
+
+/** Met en pause ou reprend toutes les synchronisations de l'organisation (planifiées et manuelles). */
+export async function toggleSyncPauseAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("ADMIN");
+    const pause = z.enum(["pause", "resume"]).parse(fd.get("intent")) === "pause";
+    await prisma.organization.update({
+      where: { id: ctx.orgId },
+      data: pause ? { syncPausedAt: new Date(), syncPausedById: ctx.userId } : { syncPausedAt: null, syncPausedById: null },
+    });
+    await audit({ orgId: ctx.orgId, userId: ctx.userId, action: pause ? "sync.paused" : "sync.resumed", entityType: "Organization", entityId: ctx.orgId });
+    revalidatePath("/sources");
+    return { ok: true, message: pause ? "Synchronisation mise en pause : aucune synchronisation planifiée ne sera lancée." : "Synchronisation reprise." };
   });
 }

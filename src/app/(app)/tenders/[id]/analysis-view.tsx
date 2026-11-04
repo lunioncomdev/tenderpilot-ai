@@ -114,6 +114,7 @@ export function AnalysisView({ result, stats }: { result: TenderAnalysisResult; 
         <Badge>Visite obligatoire : {result.siteVisitMandatory === null ? NOT_SPECIFIED : result.siteVisitMandatory ? "oui" : "non"}</Badge>
         <Badge>Groupement : {result.consortiumAllowed === null ? NOT_SPECIFIED : result.consortiumAllowed ? "autorisé" : "non autorisé"}</Badge>
         <Badge>Sous-traitance : {result.subcontractingAllowed === null ? NOT_SPECIFIED : result.subcontractingAllowed ? "autorisée" : "non autorisée"}</Badge>
+        {result.technologies?.length > 0 && <Badge tone="primary">Technologies : {result.technologies.join(", ")}</Badge>}
         {result.requiredSkills.length > 0 && <Badge tone="primary">Compétences : {result.requiredSkills.join(", ")}</Badge>}
       </div>
     </div>

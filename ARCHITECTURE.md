@@ -105,6 +105,14 @@ interface TenderConnector {
 
 ## 5. Pipeline documentaire
 
+0. **Retrait sur le profil acheteur** (`src/server/dce/`, job `retrieve-dce`) :
+   plateformes Atexo reconnues à l'URL du DCE (`/entreprise/consultation/<id>`) ;
+   règlement de consultation en accès direct, DCE complet via le formulaire de
+   retrait Prado (mode identifié ou anonyme, CGU acceptées par un administrateur
+   dans Paramètres). Session HTTPS limitée à l'hôte de la plateforme, hôtes
+   privés refusés (SSRF), taille bornée (`DCE_MAX_MB`). Option de retrait
+   automatique à l'import des nouveaux avis, avant l'analyse. Comptes des autres
+   plateformes : mot de passe chiffré AES-256-GCM (`CREDENTIALS_KEY`).
 1. **Upload** (Route Handler) : taille max configurable, vérification du type par
    *magic bytes* (`file-type`), liste blanche PDF/DOCX/XLSX/TXT/ZIP, SHA-256,
    stockage objet sous `org/<orgId>/tenders/<tenderId>/<uuid>`.
@@ -113,8 +121,10 @@ interface TenderConnector {
    devient un `TenderDocument`.
 3. **Extraction** : PDF par page (`unpdf`/pdf.js), DOCX (`mammoth`), XLSX
    (`exceljs`, tableau rendu en texte tabulé feuille par feuille), TXT.
-   OCR : non embarqué dans le MVP ; un PDF sans couche texte est marqué
-   `NEEDS_OCR` (point d'extension documenté, Tesseract en P1).
+   OCR : les pages PDF sans couche texte (< 40 caractères) sont rendues
+   (`pdftoppm`, 300 dpi) puis reconnues par Tesseract (`fra+eng`), en local,
+   page par page (`OCR_MAX_PAGES`, 150 par défaut ; ~10 s/page). Le document
+   reste `NEEDS_OCR` si les binaires sont absents ou si rien n'est lisible.
 4. **Type de pièce** déduit du nom/contenu (RC, CCTP, CCAP, AE, BPU, DPGF, annexe,
    Q/R) et modifiable.
 5. **Chunking** par page puis par paragraphes (~1 200 tokens, chevauchement léger),
@@ -220,7 +230,7 @@ Un **pré-score** (sans DCE) est calculé à l'import à partir des métadonnée
 | Recherche DCE / RAG | FTS PostgreSQL français par défaut, pgvector optionnel | Anthropic ne fournit pas d'embeddings ; le FTS ne transmet aucune donnée à un tiers. Les DCE tiennent dans la fenêtre de 1M tokens de Claude, la recherche sert surtout à cibler les extraits par section. |
 | Score | Déterministe | Explicable, testable, reproductible ; l'IA n'invente pas de note. |
 | shadcn/ui | Composants recopiés à la main | CLI interactive ; même code source, même API. |
-| OCR | Hors MVP | Coût/complexité ; détection `NEEDS_OCR` en place. |
+| OCR | Tesseract local (image Docker) | Gratuit, hors ligne : aucun DCE transmis à un tiers ; précision suffisante pour l'analyse. |
 | Dépôt sur plateforme acheteur | Manuel | Spécification MVP. |
 
 ## 11. Infrastructure

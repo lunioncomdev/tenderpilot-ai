@@ -23,6 +23,8 @@ x-app-env: &app-env
   AI_EFFORT: ${AI_EFFORT:-high}
   AI_MONTHLY_BUDGET_USD: ${AI_MONTHLY_BUDGET_USD:-200}
   LOG_LEVEL: ${LOG_LEVEL:-info}
+  DCE_MAX_MB: ${DCE_MAX_MB:-300}
+  CREDENTIALS_KEY: ${CREDENTIALS_KEY:-}
 
 services:
   postgres:

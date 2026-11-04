@@ -6,11 +6,16 @@ import { z } from "zod/v4";
 import type { ActionState } from "@/components/form";
 import { runAction } from "@/server/actions";
 import { requestAnalysis } from "@/server/analysis/analysis-service";
-import { addCustomPiece, deleteCustomPiece, generateApplicationPieces, startApplication, updatePiece } from "@/server/applications/application-service";
+import { addCustomPiece, addLot, deleteCustomPiece, deleteLot, generateApplicationPieces, LotError, setLotSelected, startApplication, updatePiece } from "@/server/applications/application-service";
+import { deletePieceFile } from "@/server/applications/piece-files";
+import { guardStatusChange } from "@/server/applications/readiness";
+import { preparePricing, PricingTemplateError, savePricingEntries, setPricingLot } from "@/server/pricing/pricing-service";
 import { audit } from "@/server/audit";
 import { requireContext } from "@/server/auth/context";
-import { NotFoundError } from "@/server/auth/rbac";
+import { hasRole, NotFoundError } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
+import { detectPlatform } from "@/server/dce/platforms";
+import { settingsProblem } from "@/server/dce/retrieve-service";
 import { storage } from "@/server/documents/storage";
 import { createProposal } from "@/server/proposals/proposal-service";
 import { enqueue } from "@/server/queue/queues";
@@ -40,6 +45,16 @@ export async function updateWorkflowAction(_p: ActionState, fd: FormData): Promi
       const m = await prisma.membership.findFirst({ where: { userId: assigneeRaw, organizationId: ctx.orgId } });
       if (!m) return { error: "Responsable invalide" };
       assigneeId = assigneeRaw;
+    }
+    // Contrôle « prêt à déposer » avant « Prête à déposer » / « Déposée ».
+    const reason = String(fd.get("overrideReason") ?? "").trim();
+    const guard = await guardStatusChange(ctx.orgId, t.id, { from: t.status, to: status }, { override: fd.get("override") === "on", reason, isAdmin: hasRole(ctx.role, "ADMIN") });
+    if (!guard.allowed) return { error: guard.error };
+    if (guard.overridden) {
+      await audit({
+        orgId: ctx.orgId, userId: ctx.userId, action: "tender.readiness_overridden", entityType: "Tender", entityId: t.id,
+        metadata: { to: status, reason: reason.slice(0, 1000), blockers: guard.overridden.checks.filter((c) => c.level === "blocker").map((c) => c.key) },
+      });
     }
     await prisma.tender.update({ where: { id: t.id }, data: { status, assigneeId } });
     if (t.status !== status) await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "tender.status_changed", entityType: "Tender", entityId: t.id, metadata: { from: t.status, to: status } });
@@ -88,9 +103,10 @@ export async function createProposalAction(_p: ActionState, fd: FormData): Promi
   const res = await runAction(async () => {
     const ctx = await requireContext("MEMBER");
     const tenderId = Id.parse(fd.get("tenderId"));
-    const existing = await prisma.proposal.findFirst({ where: { tenderId, organizationId: ctx.orgId } });
+    const lotId = Id.optional().parse(fd.get("lotId") || undefined) ?? null;
+    const existing = await prisma.proposal.findFirst({ where: { tenderId, organizationId: ctx.orgId, lotId } });
     if (existing) return { ok: true, message: existing.id };
-    const p = await createProposal(ctx.orgId, tenderId, ctx.userId);
+    const p = await createProposal(ctx.orgId, tenderId, ctx.userId, lotId);
     return { ok: true, message: p.id };
   });
   if (res?.ok && res.message) redirect(`/proposals/${res.message}`);
@@ -149,6 +165,22 @@ export async function importNoticePdfAction(_p: ActionState, fd: FormData): Prom
   });
 }
 
+/** Retrait du DCE sur le profil acheteur (plateformes prises en charge). */
+export async function retrieveDceAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const tenderId = Id.parse(fd.get("tenderId"));
+    const t = await ownTender(ctx.orgId, tenderId);
+    const problem = settingsProblem(await prisma.dceRetrievalSettings.findUnique({ where: { organizationId: ctx.orgId } }));
+    if (problem) return { error: `Retrait impossible : ${problem}.` };
+    if (detectPlatform(t.documentsUrl).kind !== "atexo") return { error: "Retrait automatique non pris en charge pour cette plateforme." };
+    await prisma.tender.update({ where: { id: tenderId }, data: { dceFetchError: null } });
+    await enqueue("retrieve-dce", { orgId: ctx.orgId, tenderId, userId: ctx.userId }, { jobId: `dce-${tenderId}-${Date.now()}`, attempts: 1 });
+    revalidatePath(`/tenders/${tenderId}`);
+    return { ok: true, message: "Retrait du DCE lancé : les pièces apparaîtront ici dans quelques instants." };
+  });
+}
+
 /** « Candidater » : la consultation rejoint « Mes candidatures ». */
 export async function applyAction(_p: ActionState, fd: FormData): Promise<ActionState> {
   const res = await runAction(async () => {
@@ -193,7 +225,8 @@ export async function addPieceAction(_p: ActionState, fd: FormData): Promise<Act
     const tenderId = Id.parse(fd.get("tenderId"));
     const label = z.string().trim().min(1, "Intitulé vide").max(250).parse(fd.get("label"));
     const group = PieceGroup.parse(fd.get("group"));
-    await addCustomPiece(ctx.orgId, tenderId, ctx.userId, { label, group });
+    const lotId = Id.optional().parse(fd.get("lotId") || undefined) ?? null;
+    await addCustomPiece(ctx.orgId, tenderId, ctx.userId, { label, group, lotId });
     revalidatePath(`/tenders/${tenderId}`);
     return { ok: true };
   });
@@ -206,5 +239,131 @@ export async function deletePieceAction(_p: ActionState, fd: FormData): Promise<
     const p = await deleteCustomPiece(ctx.orgId, id);
     revalidatePath(`/tenders/${p.tenderId}`);
     return { ok: true };
+  });
+}
+
+export async function deletePieceFileAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const id = Id.parse(fd.get("fileId"));
+    const f = await deletePieceFile(ctx.orgId, id, ctx.userId);
+    revalidatePath(`/tenders/${f.piece.tenderId}`);
+    return { ok: true };
+  });
+}
+
+export async function preparePricingAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  let target: string | null = null;
+  const res = await runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const tenderId = Id.parse(fd.get("tenderId"));
+    const documentId = Id.parse(fd.get("documentId"));
+    try {
+      const { pricing } = await preparePricing(ctx.orgId, tenderId, documentId, ctx.userId);
+      target = `/tenders/${tenderId}/pricing/${pricing.id}`;
+      revalidatePath(target);
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof PricingTemplateError) return { error: err.message };
+      throw err;
+    }
+  });
+  if (target) redirect(target);
+  return res;
+}
+
+const PricingPayload = z.object({
+  adjustmentPercent: z.number().min(-90).max(500),
+  profiles: z.array(z.string().max(100)).max(50),
+  lines: z
+    .array(z.object({
+      id: Id,
+      manualPrice: z.number().min(0).max(1e9).nullable(),
+      days: z.record(z.string().max(100), z.number().min(0).max(100_000)),
+      note: z.string().max(1000),
+    }))
+    .max(5000),
+});
+
+export async function savePricingAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const pricingId = Id.parse(fd.get("pricingId"));
+    const payload = PricingPayload.parse(JSON.parse(String(fd.get("payload") ?? "{}")));
+    const p = await savePricingEntries(ctx.orgId, pricingId, ctx.userId, payload);
+    revalidatePath(`/tenders/${p.tenderId}/pricing/${p.id}`);
+    revalidatePath(`/tenders/${p.tenderId}`);
+    return { ok: true, message: "Chiffrage enregistré." };
+  });
+}
+
+export async function deletePricingAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  let target: string | null = null;
+  const res = await runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const pricingId = Id.parse(fd.get("pricingId"));
+    const p = await prisma.pricing.findFirst({ where: { id: pricingId, organizationId: ctx.orgId } });
+    if (!p) throw new NotFoundError("Chiffrage introuvable");
+    await prisma.pricing.delete({ where: { id: p.id } });
+    await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "pricing.deleted", entityType: "Tender", entityId: p.tenderId, metadata: { pricingId: p.id } });
+    target = `/tenders/${p.tenderId}`;
+    return { ok: true };
+  });
+  if (target) redirect(target);
+  return res;
+}
+
+export async function setLotSelectedAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const lotId = Id.parse(fd.get("lotId"));
+    const selected = fd.get("selected") === "true";
+    const lot = await setLotSelected(ctx.orgId, lotId, selected, ctx.userId);
+    revalidatePath(`/tenders/${lot.tenderId}`);
+    return { ok: true };
+  });
+}
+
+export async function addLotAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const tenderId = Id.parse(fd.get("tenderId"));
+    const number = z.string().trim().min(1, "Numéro du lot requis").max(20).parse(fd.get("number"));
+    const title = z.string().trim().max(300).parse(fd.get("title") ?? "");
+    try {
+      await addLot(ctx.orgId, tenderId, ctx.userId, { number, title });
+    } catch (err) {
+      if (err instanceof LotError) return { error: err.message };
+      throw err;
+    }
+    revalidatePath(`/tenders/${tenderId}`);
+    return { ok: true, message: "Lot ajouté." };
+  });
+}
+
+export async function deleteLotAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const lotId = Id.parse(fd.get("lotId"));
+    try {
+      const lot = await deleteLot(ctx.orgId, lotId, ctx.userId);
+      revalidatePath(`/tenders/${lot.tenderId}`);
+    } catch (err) {
+      if (err instanceof LotError) return { error: err.message };
+      throw err;
+    }
+    return { ok: true };
+  });
+}
+
+export async function setPricingLotAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const pricingId = Id.parse(fd.get("pricingId"));
+    const lotId = Id.optional().parse(fd.get("lotId") || undefined) ?? null;
+    const p = await setPricingLot(ctx.orgId, pricingId, lotId, ctx.userId);
+    revalidatePath(`/tenders/${p.tenderId}`);
+    revalidatePath(`/tenders/${p.tenderId}/pricing/${p.id}`);
+    return { ok: true, message: "Lot du bordereau enregistré." };
   });
 }

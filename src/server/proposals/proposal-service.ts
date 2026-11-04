@@ -1,6 +1,7 @@
 import type { CompanyProfile, CompanyReference, Prisma } from "@prisma/client";
 import { normalizeText } from "@/lib/utils";
 import { audit } from "../audit";
+import { lotLabel } from "../applications/lots";
 import { prisma } from "../db";
 import { env } from "../env";
 import { assertAiAllowed, callStructured } from "../ai/gateway";
@@ -25,9 +26,11 @@ function cite(sources: Array<{ filename?: string; pageStart?: number | null; chu
 }
 
 /** Crée un mémoire (plan adapté + matrice de conformité) à partir de la dernière analyse. */
-export async function createProposal(orgId: string, tenderId: string, userId: string) {
+export async function createProposal(orgId: string, tenderId: string, userId: string, lotId: string | null = null) {
   const tender = await prisma.tender.findFirst({ where: { id: tenderId, organizationId: orgId } });
   if (!tender) throw new NotFoundError("Appel d'offres introuvable");
+  const lot = lotId ? await prisma.tenderLot.findFirst({ where: { id: lotId, tenderId, organizationId: orgId } }) : null;
+  if (lotId && !lot) throw new NotFoundError("Lot introuvable");
   const analysisRow = await prisma.tenderAnalysis.findFirst({
     where: { tenderId, organizationId: orgId, status: "DONE" },
     orderBy: { createdAt: "desc" },
@@ -50,7 +53,8 @@ export async function createProposal(orgId: string, tenderId: string, userId: st
     data: {
       organizationId: orgId,
       tenderId,
-      title: `Mémoire technique — ${tender.title}`.slice(0, 250),
+      lotId: lot?.id ?? null,
+      title: `Mémoire technique — ${lot ? `${lotLabel(lot)} — ` : ""}${tender.title}`.slice(0, 250),
       createdById: userId,
       sections: { create: outline.map((s, i) => ({ key: s.key, title: s.title, guidance: s.guidance, order: i })) },
       compliance: { create: compliance.map((c, i) => ({ ...c, order: i, response: "" })) },
@@ -120,7 +124,7 @@ export async function requestSectionGeneration(orgId: string, sectionId: string)
 export async function generateSection(orgId: string, sectionId: string, instruction?: string) {
   const section = await prisma.proposalSection.findFirst({
     where: { id: sectionId, proposal: { organizationId: orgId } },
-    include: { proposal: true },
+    include: { proposal: { include: { lot: true } } },
   });
   if (!section) throw new NotFoundError("Section introuvable");
 
@@ -159,6 +163,7 @@ export async function generateSection(orgId: string, sectionId: string, instruct
           references: formatReferences(ranked),
           previousContent: section.content || undefined,
           instruction,
+          lot: section.proposal.lot ? lotLabel(section.proposal.lot) : undefined,
         }),
         schema: SectionOutputSchema,
         maxTokens: 24_000,

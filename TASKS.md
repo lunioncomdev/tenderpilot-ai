@@ -34,13 +34,27 @@ Légende : `[x]` fait et testé · `[~]` fait, vérification incomplète · `[ ]
 - [x] README, .env.example, CI GitHub Actions
 
 ## P1
-- [ ] Chiffrage avancé (moteur déterministe JH × TJM, scénarios) + DPGF/BPU sur modèle officiel (ExcelJS, cellules/formules préservées)
+- [x] Chiffrage : moteur déterministe JH × TJM + ajustement global, BPU/DPGF/DQE remplis sur le modèle officiel (ExcelJS, formules préservées), intégré au dossier ZIP
+- [ ] Chiffrage : scénarios comparés, marge cible / coût de revient, import des .xls (ancien format)
 - [ ] Alertes e-mail (recherches sauvegardées `alertEnabled`, échéances)
-- [ ] Checklist documentaire par candidature, mentions dans les commentaires
+- [x] Checklist documentaire par candidature (pièces usuelles + exigences du DCE, liées au profil)
+- [x] Fichiers joints aux pièces du dossier (AE signé, BPU rempli, CV…)
+- [x] DC1 / DC2 pré-remplis (DOCX, déterministe) ; identité légale du candidat dans le profil
+- [x] Export du dossier complet en ZIP (`01_Candidature/`, `02_Offre/`, sommaire des manques)
+- [x] Gestion des lots : lots repris de l'analyse ou saisis, sélection, pièces de l'offre / mémoire / bordereau par lot, ZIP par lot, DC1 coché
+- [x] Contrôle « prêt à déposer » : bloque `READY_TO_SUBMIT` / `SUBMITTED` (date limite, lots, pièces, validité des attestations, mémoire validé sans marqueur, bordereaux complets), dérogation motivée réservée aux administrateurs et auditée
+- [ ] Contraintes de forme du RC dans le contrôle (pages max du mémoire, formats et tailles de fichiers, signature exigée) : à extraire par l'analyse
+- [ ] Indicateur « prêt / N blocages » dans « Mes candidatures »
+- [ ] Base d'intervenants / CV, attestations de bonne exécution jointes aux références
+- [ ] Groupement et sous-traitance (co-traitants, mandataire, DC4)
+- [ ] Questions à l'acheteur (brouillons depuis l'analyse, suivi des réponses)
+- [ ] Mentions dans les commentaires
 - [ ] Bibliothèque documentaire RAG (CV, méthodologies, anciens mémoires) + embeddings optionnels (Voyage)
 - [ ] Export PDF du mémoire
-- [ ] OCR (Tesseract) pour les PDF scannés
+- [x] OCR (Tesseract) pour les PDF scannés
 - [ ] Éditeur riche (WYSIWYG) en complément de l'éditeur Markdown
+- [x] Retrait automatique des DCE sur les plateformes Atexo (PLACE, Maximilien…) ; comptes plateformes chiffrés
+- [ ] Retrait automatique sur AWS-Achat, achatpublic, Klekoon (comptes déjà enregistrables)
 - [ ] Assistant IA contextuel (questions sur un DCE)
 
 ## P2

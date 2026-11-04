@@ -7,6 +7,7 @@ import { runAction } from "@/server/actions";
 import { audit } from "@/server/audit";
 import { requireContext } from "@/server/auth/context";
 import { NotFoundError } from "@/server/auth/rbac";
+import { loadReadiness } from "@/server/applications/readiness";
 import { prisma } from "@/server/db";
 import { requestSectionGeneration, saveSectionEdit, setSectionValidated } from "@/server/proposals/proposal-service";
 import { requestComplianceGeneration } from "@/server/proposals/compliance-service";
@@ -143,9 +144,19 @@ export async function setProposalStatusAction(_p: ActionState, fd: FormData): Pr
     }
     await prisma.proposal.update({ where: { id }, data: { status } });
     if (status === "IN_REVIEW") await prisma.tender.updateMany({ where: { id: p.tenderId, organizationId: ctx.orgId, status: "IN_PREPARATION" }, data: { status: "IN_VALIDATION" } });
-    if (status === "VALIDATED") await prisma.tender.updateMany({ where: { id: p.tenderId, organizationId: ctx.orgId, status: { in: ["IN_PREPARATION", "IN_VALIDATION"] } }, data: { status: "READY_TO_SUBMIT" } });
+    let message: string | undefined;
+    if (status === "VALIDATED") {
+      // La consultation ne passe « Prête à déposer » que si tout le dossier l'est (autres lots, pièces, chiffrage…).
+      const readiness = await loadReadiness(ctx.orgId, p.tenderId);
+      const next = readiness.ready ? "READY_TO_SUBMIT" : "IN_VALIDATION";
+      await prisma.tender.updateMany({ where: { id: p.tenderId, organizationId: ctx.orgId, status: { in: ["IN_PREPARATION", "IN_VALIDATION"] } }, data: { status: next } });
+      message = readiness.ready
+        ? "Mémoire validé. Le dossier est complet : candidature « Prête à déposer »."
+        : `Mémoire validé. Il reste ${readiness.blockers} point(s) bloquant(s) avant le dépôt (voir le contrôle sur la fiche de l'appel d'offres).`;
+    }
     await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "proposal.status_changed", entityType: "Proposal", entityId: id, metadata: { status } });
     revalidatePath(`/proposals/${id}`);
-    return { ok: true };
+    revalidatePath(`/tenders/${p.tenderId}`);
+    return { ok: true, message };
   });
 }

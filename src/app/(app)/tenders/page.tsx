@@ -4,13 +4,14 @@ import { DeadlineBadge, NoticeStateBadge, RecommendationBadge, ScorePill, Status
 import { ActionForm, SubmitButton } from "@/components/form";
 import { SortTh } from "@/components/sortable";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Badge, Card, CardContent, EmptyState, Field, Input, PageHeader, Select, Table, Td, Textarea } from "@/components/ui/primitives";
+import { Badge, Card, CardContent, EmptyState, Field, Input, PageHeader, Select, Table, Td, Textarea, Th } from "@/components/ui/primitives";
 import { fr } from "@/i18n/fr";
 import { formatDate, formatEur } from "@/lib/utils";
 import { PRE_APPLICATION_STATUSES } from "@/server/applications/pieces";
 import { requireContext } from "@/server/auth/context";
 import { hasRole } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
+import { isMaintenanceTender, tenderTechnologies } from "@/server/tenders/maintenance";
 import { DEFAULT_DIR, parseSearchParams, searchTenders } from "@/server/tenders/search";
 import { applyAction } from "./[id]/actions";
 import { createManualTenderAction, deleteSearchAction, saveSearchAction } from "./actions";
@@ -155,6 +156,7 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
               <tr>
                 <SortTh label="Score" column="score" sort={sort} params={sp} firstDir="desc" />
                 <SortTh label="Consultation" column="title" sort={sort} params={sp} />
+                <Th>Maintenance · technologies</Th>
                 <SortTh label="Montant" column="value" sort={sort} params={sp} firstDir="desc" />
                 <SortTh label="Publication" column="published" sort={sort} params={sp} firstDir="desc" />
                 <SortTh label="Échéance" column="deadline" sort={sort} params={sp} />
@@ -164,6 +166,8 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
             <tbody className="divide-y">
               {res.items.map((t) => {
                 const s = t.scores[0];
+                const maintenance = isMaintenanceTender(t.title, t.description);
+                const tech = maintenance ? tenderTechnologies(t.title, t.description, t.analyses[0]?.result as Record<string, unknown> | null) : null;
                 return (
                   <tr key={t.id} className="hover:bg-muted/50">
                     <Td>
@@ -181,6 +185,22 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
                         {t.buyerCountry && <span>{t.buyerCountry}{t.region ? ` · ${t.region}` : ""}</span>}
                         <NoticeStateBadge state={t.noticeState} />
                       </div>
+                    </Td>
+                    <Td className="max-w-56">
+                      {tech ? (
+                        <div className="flex flex-wrap gap-1" title={tech.fromAnalysis ? "Repéré dans l'avis et l'analyse du DCE" : "Détecté dans l'avis — à confirmer par l'analyse du DCE"}>
+                          {tech.items.length ? (
+                            <>
+                              {tech.items.slice(0, 4).map((x) => <Badge key={x} tone={tech.fromAnalysis ? "primary" : "outline"}>{x}</Badge>)}
+                              {tech.items.length > 4 && <span className="text-xs text-muted-foreground">+{tech.items.length - 4}</span>}
+                            </>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Techno non précisée</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </Td>
                     <Td className="whitespace-nowrap tabular-nums">{formatEur(t.estimatedValue?.toString(), t.currency)}</Td>
                     <Td className="whitespace-nowrap">{formatDate(t.publishedAt)}</Td>

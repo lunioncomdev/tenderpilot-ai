@@ -2,26 +2,87 @@ import ExcelJS from "exceljs";
 import JSZip from "jszip";
 import mammoth from "mammoth";
 import type { AllowedType } from "./file-type";
+import { ocrPdfPages, OcrUnavailableError } from "./ocr";
 
 export type ExtractedPage = { page: number | null; text: string };
-export type ExtractionResult = { pages: ExtractedPage[]; pageCount: number | null; needsOcr: boolean };
+export type ExtractionResult = {
+  pages: ExtractedPage[];
+  pageCount: number | null;
+  /** Texte insuffisant même après OCR (OCR absent ou illisible). */
+  needsOcr: boolean;
+  /** Nombre de pages dont le texte provient de l'OCR. */
+  ocrPages?: number;
+  ocrError?: string;
+};
+
+/** En dessous de ce nombre de caractères, une page est considérée comme scannée. */
+const MIN_PAGE_CHARS = 40;
+
+export type OcrFn = (buf: Buffer, pages: number[]) => Promise<Map<number, string>>;
 
 /** Limites anti « zip bomb ». */
 export const ZIP_LIMITS = { maxEntries: 200, maxTotalBytes: 300 * 1024 * 1024, maxEntryBytes: 80 * 1024 * 1024 };
 
-export async function extractPdf(buf: Buffer): Promise<ExtractionResult> {
+export async function extractPdf(buf: Buffer, ocr: OcrFn = ocrPdfPages): Promise<ExtractionResult> {
   const { getDocumentProxy, extractText } = await import("unpdf");
+  // new Uint8Array(buf) copie : pdf.js peut détacher son tampon, l'original sert à l'OCR.
   const pdf = await getDocumentProxy(new Uint8Array(buf));
   const { totalPages, text } = await extractText(pdf, { mergePages: false });
   const pages = text.map((t, i) => ({ page: i + 1, text: cleanText(t) }));
+
+  // Pages scannées (document entier ou annexes signées dans un PDF texte) : OCR.
+  const scanned = pages.filter((p) => p.text.length < MIN_PAGE_CHARS).map((p) => p.page);
+  let ocrPages = 0;
+  let ocrError: string | undefined;
+  if (scanned.length) {
+    try {
+      const recognized = await ocr(buf, scanned);
+      for (const p of pages) {
+        const t = recognized.get(p.page);
+        if (t === undefined) continue;
+        const cleaned = cleanText(t);
+        if (cleaned.length > p.text.length) {
+          p.text = cleaned;
+          ocrPages++;
+        }
+      }
+    } catch (err) {
+      ocrError = err instanceof OcrUnavailableError ? err.message : `Échec de l'OCR : ${(err as Error).message}`;
+    }
+  }
+
   const chars = pages.reduce((a, p) => a + p.text.length, 0);
-  // Moins de ~40 caractères par page en moyenne : PDF scanné sans couche texte.
-  return { pages, pageCount: totalPages, needsOcr: totalPages > 0 && chars / totalPages < 40 };
+  // Moins de ~40 caractères par page en moyenne (après OCR) : texte inexploitable.
+  return { pages, pageCount: totalPages, needsOcr: totalPages > 0 && chars / totalPages < MIN_PAGE_CHARS, ocrPages, ocrError };
 }
 
 export async function extractDocx(buf: Buffer): Promise<ExtractionResult> {
   const { value: html } = await mammoth.convertToHtml({ buffer: buf });
   return { pages: [{ page: null, text: htmlToText(html) }], pageCount: null, needsOcr: false };
+}
+
+/**
+ * Texte d'une cellule. `cell.text` d'exceljs lève une exception sur une cellule
+ * fusionnée dont la cellule maîtresse est vide (fréquent dans les BPU/DQE) :
+ * on retombe alors sur la valeur brute.
+ */
+function cellText(cell: ExcelJS.Cell): string {
+  // Cellule fusionnée secondaire : le texte n'est conservé que dans la cellule maîtresse.
+  if (cell.isMerged && cell.master && cell.master.address !== cell.address) return "";
+  try {
+    return String(cell.text ?? "");
+  } catch {
+    const v = cell.master?.value ?? cell.value;
+    if (v === null || v === undefined) return "";
+    if (typeof v === "object") {
+      if ("richText" in v) return v.richText.map((r) => r.text).join("");
+      if ("result" in v) return String(v.result ?? "");
+      if ("text" in v) return String(v.text ?? "");
+      if (v instanceof Date) return v.toISOString().slice(0, 10);
+      return "";
+    }
+    return String(v);
+  }
 }
 
 export async function extractXlsx(buf: Buffer): Promise<ExtractionResult> {
@@ -33,7 +94,7 @@ export async function extractXlsx(buf: Buffer): Promise<ExtractionResult> {
     sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       const cells: string[] = [];
       row.eachCell({ includeEmpty: true }, (cell) => {
-        cells.push(String(cell.text ?? "").replace(/\s+/g, " ").trim());
+        cells.push(cellText(cell).replace(/\s+/g, " ").trim());
       });
       while (cells.length && !cells[cells.length - 1]) cells.pop();
       if (cells.some(Boolean)) lines.push(`L${rowNumber} | ${cells.join(" | ")}`);

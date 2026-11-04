@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { AlertTriangle, CheckCircle2, Circle, CircleDashed, CircleSlash, FileText, Paperclip, Plus, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { AlertTriangle, CheckCircle2, Circle, CircleDashed, CircleSlash, Download, FileText, Loader2, Paperclip, Plus, Trash2, Upload, X } from "lucide-react";
 import type { PieceGroup, PieceStatus } from "@prisma/client";
 import { ActionForm, FormMessage, SubmitButton, type ActionState } from "@/components/form";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import { Badge, Input, Select } from "@/components/ui/primitives";
 import { fr } from "@/i18n/fr";
 import { cn, formatDate } from "@/lib/utils";
 import type { PieceDocAlert, PieceDocs } from "@/server/company/documents";
-import { addPieceAction, deletePieceAction, updatePieceAction } from "./actions";
+import { addPieceAction, createProposalAction, deletePieceAction, deletePieceFileAction, updatePieceAction } from "./actions";
 
 export type PieceView = {
   id: string;
@@ -22,8 +23,13 @@ export type PieceView = {
   fromDce: boolean;
   status: PieceStatus;
   note: string;
+  lotId: string | null;
+  files: Array<{ id: string; filename: string; sizeBytes: number }>;
   profile: PieceDocs | null;
 };
+
+/** Pièces pour lesquelles l'application génère un formulaire pré-rempli. */
+const GENERATED_FORMS: Record<string, string> = { dc1: "DC1", dc2: "DC2" };
 
 const DOC_ALERT: Record<Exclude<PieceDocAlert, null | "missing">, { tone: "danger" | "warning"; label: string }> = {
   expired: { tone: "danger", label: "Expirée — à mettre à jour" },
@@ -34,23 +40,42 @@ const DOC_ALERT: Record<Exclude<PieceDocAlert, null | "missing">, { tone: "dange
 const ICON = { TODO: Circle, IN_PROGRESS: CircleDashed, DONE: CheckCircle2, NOT_APPLICABLE: CircleSlash } as const;
 const ICON_TONE = { TODO: "text-muted-foreground", IN_PROGRESS: "text-primary", DONE: "text-success", NOT_APPLICABLE: "text-muted-foreground/60" } as const;
 
-export function ApplicationPieces({ tenderId, pieces, canEdit, proposalId }: { tenderId: string; pieces: PieceView[]; canEdit: boolean; proposalId?: string }) {
+export type PieceSection = { key: string; title: string; group: PieceGroup; lotId: string | null; proposalId?: string };
+
+export function ApplicationPieces({ tenderId, pieces, sections, canEdit, canCreateProposal, maxMb }: {
+  tenderId: string;
+  pieces: PieceView[];
+  sections: PieceSection[];
+  canEdit: boolean;
+  canCreateProposal: boolean;
+  maxMb: number;
+}) {
   return (
     <div className="flex flex-col gap-5">
-      {(["CANDIDATURE", "OFFRE"] as const).map((group) => {
-        const items = pieces.filter((p) => p.group === group);
+      {sections.map((section) => {
+        const items = pieces.filter((p) => p.group === section.group && p.lotId === section.lotId);
         return (
-          <section key={group}>
-            <h4 className="mb-2 text-sm font-semibold">{fr.pieceGroup[group]}</h4>
+          <section key={section.key}>
+            <h4 className="mb-2 text-sm font-semibold">{section.title}</h4>
             {items.length > 0 && (
               <ul className="divide-y rounded-lg border">
-                {items.map((p) => <PieceRow key={p.id} piece={p} canEdit={canEdit} proposalId={p.key === "memoire" ? proposalId : undefined} />)}
+                {items.map((p) => (
+                  <PieceRow
+                    key={p.id}
+                    piece={p}
+                    tenderId={tenderId}
+                    canEdit={canEdit}
+                    maxMb={maxMb}
+                    memoire={p.key === "memoire" ? { proposalId: section.proposalId, canCreate: canCreateProposal, lotId: section.lotId } : undefined}
+                  />
+                ))}
               </ul>
             )}
             {canEdit && (
               <ActionForm action={addPieceAction} resetOnSuccess className="mt-2 flex items-center gap-2">
                 <input type="hidden" name="tenderId" value={tenderId} />
-                <input type="hidden" name="group" value={group} />
+                <input type="hidden" name="group" value={section.group} />
+                {section.lotId && <input type="hidden" name="lotId" value={section.lotId} />}
                 <Input name="label" placeholder="Ajouter une pièce…" className="h-8 text-sm" maxLength={250} required />
                 <SubmitButton size="sm" variant="ghost" aria-label="Ajouter la pièce"><Plus /></SubmitButton>
               </ActionForm>
@@ -62,7 +87,13 @@ export function ApplicationPieces({ tenderId, pieces, canEdit, proposalId }: { t
   );
 }
 
-function PieceRow({ piece: p, canEdit, proposalId }: { piece: PieceView; canEdit: boolean; proposalId?: string }) {
+function PieceRow({ piece: p, tenderId, canEdit, maxMb, memoire }: {
+  piece: PieceView;
+  tenderId: string;
+  canEdit: boolean;
+  maxMb: number;
+  memoire?: { proposalId?: string; canCreate: boolean; lotId: string | null };
+}) {
   // Appel direct de l'action, sans <form> : React 19 réinitialise les champs d'un
   // formulaire après une Server Action, ce qui réaffichait l'ancien statut.
   const [status, setStatus] = useState(p.status);
@@ -102,10 +133,24 @@ function PieceRow({ piece: p, canEdit, proposalId }: { piece: PieceView; canEdit
           {p.detail && p.detail !== p.label && <p className="mt-0.5 text-xs text-muted-foreground">{p.detail}</p>}
           {p.source && <p className="mt-0.5 text-xs text-muted-foreground">Source : {p.source}</p>}
           {p.profile && status !== "NOT_APPLICABLE" && <ProfileDocs profile={p.profile} />}
-          {proposalId && <Link href={`/proposals/${proposalId}`} className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"><FileText className="size-3" /> Ouvrir le mémoire technique</Link>}
+          {memoire?.proposalId && <Link href={`/proposals/${memoire.proposalId}`} className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"><FileText className="size-3" /> Ouvrir le mémoire technique</Link>}
+          {memoire && !memoire.proposalId && memoire.canCreate && status !== "NOT_APPLICABLE" && (
+            <ActionForm action={createProposalAction} className="mt-1">
+              <input type="hidden" name="tenderId" value={tenderId} />
+              {memoire.lotId && <input type="hidden" name="lotId" value={memoire.lotId} />}
+              <button type="submit" className="inline-flex items-center gap-1 text-xs text-primary hover:underline"><FileText className="size-3" /> Préparer le mémoire technique</button>
+            </ActionForm>
+          )}
+          {GENERATED_FORMS[p.key] && status !== "NOT_APPLICABLE" && (
+            <a href={`/api/v1/tenders/${tenderId}/forms/${p.key}`} download className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline">
+              <Download className="size-3" /> Télécharger le {GENERATED_FORMS[p.key]} pré-rempli (DOCX)
+            </a>
+          )}
+          {p.files.length > 0 && <PieceFiles files={p.files} canEdit={canEdit} />}
         </div>
         {canEdit ? (
-          <div className="flex items-center gap-1">
+          <div className="flex max-w-full flex-wrap items-center justify-end gap-1">
+            {status !== "NOT_APPLICABLE" && <PieceFileUpload pieceId={p.id} label={p.label} maxMb={maxMb} />}
             <Select
               value={status}
               onChange={(e) => save({ status: e.currentTarget.value as PieceStatus, note })}
@@ -170,5 +215,77 @@ function ProfileDocs({ profile }: { profile: PieceDocs }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function PieceFiles({ files, canEdit }: { files: PieceView["files"]; canEdit: boolean }) {
+  return (
+    <ul className="mt-1.5 flex flex-col gap-1 text-xs">
+      {files.map((f) => (
+        <li key={f.id} className="flex flex-wrap items-center gap-1.5">
+          <Paperclip className="size-3 text-muted-foreground" />
+          <a href={`/api/v1/piece-files/${f.id}/download`} className="text-primary hover:underline">{f.filename}</a>
+          <span className="text-muted-foreground">{formatSize(f.sizeBytes)}</span>
+          {canEdit && (
+            <ActionForm action={deletePieceFileAction} confirm={`Retirer « ${f.filename} » de cette pièce ?`} className="inline-flex">
+              <input type="hidden" name="fileId" value={f.id} />
+              <button type="submit" className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-danger" aria-label={`Retirer ${f.filename}`}><X className="size-3" /></button>
+            </ActionForm>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} Ko`;
+  return `${(bytes / (1024 * 1024)).toFixed(1).replace(".", ",")} Mo`;
+}
+
+/** Joint un ou plusieurs fichiers propres à la consultation (AE signé, BPU rempli, CV…). */
+function PieceFileUpload({ pieceId, label, maxMb }: { pieceId: string; label: string; maxMb: number }) {
+  const router = useRouter();
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function upload(files: FileList | null) {
+    if (!files?.length) return;
+    setError(null);
+    const tooBig = [...files].find((f) => f.size > maxMb * 1024 * 1024);
+    if (tooBig) return setError(`« ${tooBig.name} » dépasse ${maxMb} Mo.`);
+    setBusy(true);
+    for (const file of files) {
+      const fd = new FormData();
+      fd.set("file", file);
+      const res = await fetch(`/api/v1/pieces/${pieceId}/files`, { method: "POST", body: fd });
+      if (!res.ok) {
+        setError(((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.statusText);
+        break;
+      }
+    }
+    setBusy(false);
+    if (input.current) input.current.value = "";
+    router.refresh();
+  }
+
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        multiple
+        accept=".pdf,.docx,.xlsx,.jpg,.jpeg,.png"
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden
+        onChange={(e) => upload(e.currentTarget.files)}
+      />
+      <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs" disabled={busy} onClick={() => input.current?.click()} aria-label={`Joindre un fichier : ${label}`} title="Joindre un fichier (PDF, DOCX, XLSX, JPG, PNG)">
+        {busy ? <Loader2 className="animate-spin" /> : <Upload />} Joindre
+      </Button>
+      {error && <span className="basis-full text-right text-xs text-danger" role="alert">{error}</span>}
+    </>
   );
 }

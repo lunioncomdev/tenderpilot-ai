@@ -87,9 +87,14 @@ tests** (`tests/helpers/fake-llm.ts`) ; il n'est jamais utilisé par l'applicati
 ## Limites connues (MVP)
 
 - Dépôt des offres sur les plateformes acheteurs : **manuel**.
-- DCE : téléchargement par l'utilisateur sur la plateforme de l'acheteur puis
-  import (pas de contournement d'authentification ni de CAPTCHA).
-- OCR non embarqué : un PDF scanné est signalé « OCR requis ».
+- DCE : retrait automatique sur les plateformes Atexo (PLACE, Maximilien,
+  Solaere, Mégalis…) — règlement de consultation en accès direct, DCE complet via
+  le formulaire de retrait (mode identifié ou anonyme, CGU acceptées dans
+  Paramètres → Récupération des DCE). Autres plateformes (AWS-Achat,
+  achatpublic, Klekoon…) : comptes enregistrables (chiffrés), import manuel.
+  Pas de contournement d'authentification ni de CAPTCHA.
+- OCR des PDF scannés par Tesseract (inclus dans l'image Docker ; hors Docker,
+  installer `tesseract-ocr tesseract-ocr-fra poppler-utils`). Texte à vérifier.
 - PLACE / e-Procurement BE : pas de connecteur (pas d'API publique documentée
   pour PLACE ; les avis au-dessus des seuils figurent au BOAMP/TED).
 - Chiffrage, alertes e-mail, bibliothèque RAG, export PDF : voir P1 dans TASKS.md.

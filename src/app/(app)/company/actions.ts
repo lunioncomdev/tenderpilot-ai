@@ -9,6 +9,7 @@ import { audit } from "@/server/audit";
 import { requireContext } from "@/server/auth/context";
 import { deleteCompanyDocument } from "@/server/company/company-document-service";
 import { prisma } from "@/server/db";
+import { parseRatesText } from "@/server/pricing/compute";
 import { computePreScore } from "@/server/scoring/prescore";
 
 const list = z.string().optional().transform((s) => splitList(s ?? ""));
@@ -20,6 +21,16 @@ const ProfileSchema = z
   .object({
     legalName: z.string().trim().min(2).max(200),
     siren: z.string().trim().regex(/^(\d{9}|\d{14})?$/, "SIREN (9 chiffres) ou SIRET (14 chiffres)").optional(),
+    legalForm: text(100),
+    nafCode: text(10).transform((s) => s.toUpperCase()),
+    vatNumber: text(20).transform((s) => s.replace(/\s/g, "").toUpperCase()),
+    address: text(300),
+    postalCode: text(10),
+    city: text(100),
+    phone: text(30),
+    email: z.string().trim().max(200).pipe(z.union([z.literal(""), z.email("E-mail invalide")])).default(""),
+    legalRepName: text(200),
+    legalRepTitle: text(100),
     country: z.string().trim().length(2, "Code pays ISO à 2 lettres").transform((s) => s.toUpperCase()),
     eligibleCountries: list.transform((l) => l.map((c) => c.toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c))),
     description: text(),
@@ -41,6 +52,15 @@ const ProfileSchema = z
     gdprCommitments: text(),
     ecoDesign: text(),
     accessibility: text(),
+    dailyRates: z
+      .string()
+      .max(5000)
+      .optional()
+      .transform((s, ctx) => {
+        const { rates, errors } = parseRatesText(s ?? "");
+        if (errors.length) ctx.addIssue({ code: "custom", message: `TJM illisible : « ${errors[0]} » (format attendu : Profil : 750)` });
+        return rates;
+      }),
   })
   .refine((d) => d.minBudgetEur === null || d.maxBudgetEur === null || d.minBudgetEur <= d.maxBudgetEur, {
     message: "Le budget minimum doit être inférieur au maximum",
