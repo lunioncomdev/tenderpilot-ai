@@ -7,6 +7,9 @@ import { requestAutoAnalysis, runAnalysis } from "@/server/analysis/analysis-ser
 import { ALL_SOURCES } from "@/server/connectors/registry";
 import { importBoampNoticePdf } from "@/server/documents/boamp-notice";
 import { processDocument } from "@/server/documents/document-service";
+import {
+  analyzeAfterRetrieval, autoRetrieveDce, DceRetrievalUnavailableError, enqueuePendingDce, retrieveDce, retrievePendingDce,
+} from "@/server/dce/retrieve-service";
 import { generateCompliance } from "@/server/proposals/compliance-service";
 import { generateSection } from "@/server/proposals/proposal-service";
 import { enqueue, getQueue, type JobMap, type QueueName } from "@/server/queue/queues";
@@ -19,10 +22,18 @@ async function handle(job: Job) {
   switch (name) {
     case "sync-source": {
       const d = job.data as JobMap["sync-source"];
-      return runSync(d.orgId, d.source, { trigger: d.trigger, autoImportNotices: true });
+      // Pause décidée après la mise en file : le job est ignoré.
+      const org = await prisma.organization.findUnique({ where: { id: d.orgId }, select: { syncPausedAt: true } });
+      if (!org || org.syncPausedAt) return { skipped: "paused" };
+      const run = await runSync(d.orgId, d.source, { trigger: d.trigger, autoImportNotices: true });
+      // Puis rattrapage des DCE non retirés (offres antérieures, imports manqués).
+      await enqueuePendingDce(d.orgId).catch((err) => logger.warn({ err, orgId: d.orgId }, "rattrapage des DCE non mis en file"));
+      return run;
     }
     case "sync-all": {
-      const configs = await prisma.sourceConfig.findMany({ where: { enabled: true, source: { in: ALL_SOURCES } } });
+      const configs = await prisma.sourceConfig.findMany({
+        where: { enabled: true, source: { in: ALL_SOURCES }, organization: { syncPausedAt: null } },
+      });
       for (const c of configs) await enqueue("sync-source", { orgId: c.organizationId, source: c.source, trigger: "cron" });
       return { enqueued: configs.length };
     }
@@ -34,11 +45,22 @@ async function handle(job: Job) {
       const d = job.data as JobMap["import-notice-pdf"];
       const imported = await importBoampNoticePdf(d.orgId, d.tenderId, d.userId);
       if (!d.analyze || imported.duplicate) return imported;
+      // Retrait automatique du DCE (si activé) avant l'analyse, pour qu'elle porte sur le dossier complet.
+      const dce = await autoRetrieveDce(d.orgId, d.tenderId);
       const auto = await requestAutoAnalysis(d.orgId, d.tenderId);
       if (auto.analysis) {
         await enqueue("analyze-tender", { orgId: d.orgId, analysisId: auto.analysis.id }, { jobId: `analysis-${auto.analysis.id}`, attempts: 2 });
       }
-      return { ...imported, analysis: auto };
+      return { ...imported, dce, analysis: auto };
+    }
+    case "retrieve-dce": {
+      const d = job.data as JobMap["retrieve-dce"];
+      const outcome = await retrieveDce(d.orgId, d.tenderId, d.userId);
+      return { ...outcome, analysisId: await analyzeAfterRetrieval(d.orgId, d.tenderId, outcome) };
+    }
+    case "retrieve-dce-pending": {
+      const d = job.data as JobMap["retrieve-dce-pending"];
+      return retrievePendingDce(d.orgId);
     }
     case "analyze-tender": {
       const d = job.data as JobMap["analyze-tender"];
@@ -62,7 +84,7 @@ async function processor(job: Job) {
   try {
     return await handle(job);
   } catch (err) {
-    if (err instanceof AiNotAllowedError || (err instanceof LlmError && err.code !== "api")) {
+    if (err instanceof AiNotAllowedError || err instanceof DceRetrievalUnavailableError || (err instanceof LlmError && err.code !== "api")) {
       throw new UnrecoverableError((err as Error).message);
     }
     throw err;

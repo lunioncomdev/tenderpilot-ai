@@ -47,7 +47,7 @@ export default async function ProposalPage({
   });
   if (!proposal) notFound();
   const canEdit = hasRole(ctx.role, "MEMBER");
-  const ai = aiStatus();
+  const ai = await aiStatus(ctx.orgId);
   const sectionsGenerating = proposal.sections.filter((s) => s.status === "GENERATING").length;
   const matrixGenerating = !!proposal.complianceGeneratingAt;
   const generating = sectionsGenerating > 0 || matrixGenerating;

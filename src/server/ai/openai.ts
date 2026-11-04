@@ -86,3 +86,21 @@ export class OpenAIProvider implements LlmProvider {
     return { data: result.data, usage, model: response.model, durationMs: Date.now() - started };
   }
 }
+
+/**
+ * Vérifie qu'une clé OpenAI donne accès au modèle demandé (appel gratuit `models.retrieve`).
+ * Retourne un message d'erreur lisible, ou null si l'accès est confirmé.
+ */
+export async function checkOpenAiAccess(apiKey: string, model: string): Promise<string | null> {
+  const client = new OpenAI({ apiKey, maxRetries: 1, timeout: 15_000 });
+  try {
+    await client.models.retrieve(model);
+    return null;
+  } catch (err) {
+    if (err instanceof OpenAI.AuthenticationError) return "Clé API OpenAI invalide";
+    if (err instanceof OpenAI.NotFoundError) return `Modèle « ${model} » introuvable ou non accessible avec cette clé`;
+    if (err instanceof OpenAI.PermissionDeniedError) return `Accès refusé au modèle « ${model} » pour cette clé`;
+    if (err instanceof OpenAI.APIError) return `Vérification impossible (erreur API OpenAI ${err.status ?? "?"}) : ${err.message}`;
+    return `Vérification impossible : ${(err as Error).message}`;
+  }
+}

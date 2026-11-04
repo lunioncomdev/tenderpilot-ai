@@ -1,6 +1,6 @@
 import { SAFETY_RULES } from "./common";
 
-export const ANALYZE_TENDER_PROMPT_VERSION = "analyze-tender@2026-10-27.2"; // .2 : extraction en 4 passes
+export const ANALYZE_TENDER_PROMPT_VERSION = "analyze-tender@2026-11-03.1"; // .2 : extraction en 4 passes ; 11-03 : champ technologies
 
 export const ANALYZE_TENDER_SYSTEM = `
 Tu es un analyste expert des marchés publics français et européens, spécialisé dans les prestations informatiques (développement, TMA, SaaS, IA, hébergement).
@@ -10,6 +10,7 @@ ${SAFETY_RULES}
 
 Précisions sur l'extraction :
 - "requiredSkills" : compétences et technologies explicitement exigées ou imposées (pas celles simplement évoquées), en termes courts.
+- "technologies" : pile technique de l'existant à maintenir ou imposée (langages, frameworks, CMS, bases de données, serveurs, versions comprises), telle que nommée dans les documents ; vide si non précisée. Pas de compétences génériques (« maintenance corrective »).
 - "requiredCertifications" : uniquement les certifications/qualifications OBLIGATOIRES pour candidater (pas les simples atouts).
 - "minAnnualRevenueEur" / "minReferences" : uniquement si un seuil chiffré est exigé.
 - "awardCriteria" : critères de jugement des offres avec leur pondération en pourcentage telle qu'écrite.

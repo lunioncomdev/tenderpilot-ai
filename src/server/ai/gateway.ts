@@ -2,6 +2,7 @@ import type { Plan } from "@prisma/client";
 import { prisma } from "../db";
 import { env } from "../env";
 import { logger } from "../logger";
+import { decryptSecret } from "../dce/secrets";
 import { AnthropicProvider } from "./anthropic";
 import { OpenAIProvider } from "./openai";
 import { estimateCostUsd, LlmError, type LlmProvider, type StructuredRequest, type StructuredResponse } from "./provider";
@@ -27,31 +28,58 @@ export function setProviderForTests(p: LlmProvider | undefined) {
   override = p;
 }
 
-export function getProvider(): LlmProvider {
+/** Configuration IA effective d'une organisation : réglages enregistrés, sinon variables d'environnement. */
+export type AiConfig = {
+  provider: "openai" | "anthropic";
+  model: string;
+  apiKey?: string;
+  /** Origine de la clé : saisie dans Paramètres ou variable d'environnement. */
+  keySource?: "organization" | "env";
+};
+
+export async function resolveAiConfig(orgId: string): Promise<AiConfig> {
+  const e = env();
+  if (e.AI_PROVIDER !== "openai") return { provider: "anthropic", model: e.AI_MODEL, apiKey: e.ANTHROPIC_API_KEY, keySource: e.ANTHROPIC_API_KEY ? "env" : undefined };
+  const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { openaiApiKeyEnc: true, aiModel: true } });
+  let apiKey: string | undefined;
+  let keySource: AiConfig["keySource"];
+  if (org?.openaiApiKeyEnc) {
+    try {
+      apiKey = decryptSecret(org.openaiApiKeyEnc);
+      keySource = "organization";
+    } catch (err) {
+      logger.warn({ err, orgId }, "clé OpenAI de l'organisation illisible");
+    }
+  }
+  if (!apiKey && e.OPENAI_API_KEY) {
+    apiKey = e.OPENAI_API_KEY;
+    keySource = "env";
+  }
+  return { provider: "openai", model: org?.aiModel || e.AI_MODEL, apiKey, keySource };
+}
+
+export async function getProvider(orgId: string): Promise<LlmProvider> {
   if (override) return override;
   const e = env();
   if (!e.AI_ENABLED) throw new AiNotAllowedError("L'IA est désactivée (AI_ENABLED=false)");
-  const key = apiKey();
-  if (!key) throw new AiNotAllowedError(`Clé ${apiKeyName()} absente`);
-  return e.AI_PROVIDER === "openai"
-    ? new OpenAIProvider(key, e.AI_MODEL, e.AI_EFFORT)
-    : new AnthropicProvider(key, e.AI_MODEL, e.AI_EFFORT);
+  const cfg = await resolveAiConfig(orgId);
+  if (!cfg.apiKey) throw new AiNotAllowedError(missingKeyReason(cfg));
+  return cfg.provider === "openai"
+    ? new OpenAIProvider(cfg.apiKey, cfg.model, e.AI_EFFORT)
+    : new AnthropicProvider(cfg.apiKey, cfg.model, e.AI_EFFORT);
 }
 
-function apiKeyName(): "OPENAI_API_KEY" | "ANTHROPIC_API_KEY" {
-  return env().AI_PROVIDER === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+function missingKeyReason(cfg: AiConfig) {
+  return cfg.provider === "openai" ? "Clé API OpenAI absente (Paramètres › Intelligence artificielle ou OPENAI_API_KEY)" : "Clé ANTHROPIC_API_KEY absente";
 }
 
-function apiKey(): string | undefined {
-  return env()[apiKeyName()];
-}
-
-export function aiStatus(): { enabled: boolean; reason?: string; model: string } {
+export async function aiStatus(orgId: string): Promise<{ enabled: boolean; reason?: string; model: string; keySource?: AiConfig["keySource"] }> {
   const e = env();
   if (override) return { enabled: true, model: override.model };
-  if (!e.AI_ENABLED) return { enabled: false, reason: "IA désactivée (AI_ENABLED=false)", model: e.AI_MODEL };
-  if (!apiKey()) return { enabled: false, reason: `Clé ${apiKeyName()} absente`, model: e.AI_MODEL };
-  return { enabled: true, model: e.AI_MODEL };
+  const cfg = await resolveAiConfig(orgId);
+  if (!e.AI_ENABLED) return { enabled: false, reason: "IA désactivée (AI_ENABLED=false)", model: cfg.model, keySource: cfg.keySource };
+  if (!cfg.apiKey) return { enabled: false, reason: missingKeyReason(cfg), model: cfg.model };
+  return { enabled: true, model: cfg.model, keySource: cfg.keySource };
 }
 
 function monthStart(now = new Date()) {
@@ -72,7 +100,7 @@ export async function monthlySpendUsd(orgId: string): Promise<number> {
  */
 export async function assertAiAllowed(orgId: string, op: "analysis" | "section"): Promise<void> {
   if (!override) {
-    const st = aiStatus();
+    const st = await aiStatus(orgId);
     if (!st.enabled) throw new AiNotAllowedError(st.reason ?? "IA indisponible");
   }
   const [org, profile, spend] = await Promise.all([
@@ -102,7 +130,7 @@ export async function callStructured<T>(
   req: StructuredRequest<T>,
   refId?: string,
 ): Promise<StructuredResponse<T>> {
-  const provider = getProvider();
+  const provider = await getProvider(orgId);
   const started = Date.now();
   try {
     const res = await provider.generateStructured(req);

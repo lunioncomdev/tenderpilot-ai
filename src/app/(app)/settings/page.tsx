@@ -1,6 +1,6 @@
 import { ActionForm, SubmitButton } from "@/components/form";
 import { parseSort, SortTh, sortRows } from "@/components/sortable";
-import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, Field, Input, PageHeader, Select, Table, Td, Textarea } from "@/components/ui/primitives";
+import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, Field, Input, PageHeader, Select, Table, Td, Textarea, Th } from "@/components/ui/primitives";
 import { formatDateTime } from "@/lib/utils";
 import { aiStatus, monthlySpendUsd, PLAN_LIMITS } from "@/server/ai/gateway";
 import { AI_RULE_MAX_LENGTH, AI_RULE_OPS, parseAiRules } from "@/server/ai/rules";
@@ -9,7 +9,9 @@ import { hasRole, ROLE_LABELS } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
 import { CRITERIA, resolveWeights } from "@/server/scoring/engine";
-import { addMemberAction, saveAiRulesAction, saveWeightsAction } from "./actions";
+import { KNOWN_PLATFORMS } from "@/server/dce/platforms";
+import { settingsProblem } from "@/server/dce/retrieve-service";
+import { addMemberAction, deletePlatformAccountAction, saveAiRulesAction, saveAiSettingsAction, saveDceSettingsAction, savePlatformAccountAction, saveWeightsAction } from "./actions";
 
 export const metadata = { title: "Paramètres" };
 
@@ -21,12 +23,14 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const sp = await searchParams;
   const usageSort = parseSort(sp, USAGE_SORT, { key: "date", dir: "desc" }, "u_");
   const memberSort = parseSort(sp, MEMBER_SORT, { key: "name", dir: "asc" }, "m_");
-  const [org, profile, memberRows, usageRows, spend] = await Promise.all([
+  const [org, profile, memberRows, usageRows, spend, dce, accounts] = await Promise.all([
     prisma.organization.findUniqueOrThrow({ where: { id: ctx.orgId } }),
     prisma.companyProfile.findUnique({ where: { organizationId: ctx.orgId } }),
     prisma.membership.findMany({ where: { organizationId: ctx.orgId }, include: { user: true }, orderBy: { createdAt: "asc" } }),
     prisma.aiUsageLog.findMany({ where: { organizationId: ctx.orgId }, orderBy: { createdAt: "desc" }, take: 25 }),
     monthlySpendUsd(ctx.orgId),
+    prisma.dceRetrievalSettings.findUnique({ where: { organizationId: ctx.orgId } }),
+    prisma.platformAccount.findMany({ where: { organizationId: ctx.orgId }, orderBy: { host: "asc" }, select: { id: true, host: true, login: true, updatedAt: true } }),
   ]);
   // Tri des 25 derniers appels (la liste reste celle des plus récents).
   const usage = sortRows(usageRows, usageSort, {
@@ -46,8 +50,17 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const raw = (profile?.scoringWeights ?? {}) as Record<string, number>;
   const effective = resolveWeights(profile?.scoringWeights);
   const isAdmin = hasRole(ctx.role, "ADMIN");
-  const ai = aiStatus();
+  const ai = await aiStatus(ctx.orgId);
+  const isOpenAi = env().AI_PROVIDER === "openai";
   const limits = PLAN_LIMITS[org.plan];
+  const dceProblem = settingsProblem(dce);
+  // Pré-remplissage depuis le profil entreprise et l'utilisateur courant.
+  const [firstName, ...rest] = ctx.name.split(" ");
+  const dv = {
+    firstName: dce?.firstName || firstName || "", lastName: dce?.lastName || rest.join(" "), email: dce?.email || ctx.email,
+    phone: dce?.phone ?? "", legalName: dce?.legalName || profile?.legalName || "", siret: dce?.siret || profile?.siren || "",
+    address: dce?.address ?? "", address2: dce?.address2 ?? "", postalCode: dce?.postalCode ?? "", city: dce?.city ?? "",
+  };
 
   return (
     <>
@@ -73,10 +86,36 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         <Card>
           <CardHeader>
             <CardTitle>Intelligence artificielle</CardTitle>
-            <CardDescription>Fournisseur : OpenAI. Les nouveaux avis BOAMP sont analysés automatiquement après import de leur extrait ; les autres appels sont déclenchés manuellement.</CardDescription>
+            <CardDescription>Fournisseur : {isOpenAi ? "OpenAI" : "Anthropic"}. Les nouveaux avis BOAMP sont analysés automatiquement après import de leur extrait ; les autres appels sont déclenchés manuellement.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm">
-            <Alert tone={ai.enabled ? "success" : "warning"}>{ai.enabled ? `Active — modèle ${ai.model}, effort ${env().AI_EFFORT}.` : `Inactive : ${ai.reason}.`}</Alert>
+            <Alert tone={ai.enabled ? "success" : "warning"}>{ai.enabled ? `Active — modèle ${ai.model}, effort ${env().AI_EFFORT}${ai.keySource === "organization" ? ", clé de l'organisation" : ai.keySource === "env" ? ", clé du serveur" : ""}.` : `Inactive : ${ai.reason}.`}</Alert>
+            {isOpenAi && (
+              <ActionForm action={saveAiSettingsAction} className="grid gap-3 rounded-lg border p-3 sm:grid-cols-2">
+                <Field label="Modèle OpenAI" hint={`Vide : ${env().AI_MODEL} (AI_MODEL).`}>
+                  <Input name="model" defaultValue={org.aiModel ?? ""} placeholder={env().AI_MODEL} list="openai-models" autoComplete="off" disabled={!isAdmin} />
+                  <datalist id="openai-models">
+                    {["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra", "gpt-5.5"].map((m) => <option key={m} value={m} />)}
+                  </datalist>
+                </Field>
+                <Field
+                  label="Clé API OpenAI"
+                  hint={org.openaiApiKeyEnc ? "Clé enregistrée (chiffrée). Laisser vide pour la conserver." : env().OPENAI_API_KEY ? "Vide : clé OPENAI_API_KEY du serveur." : "Aucune clé configurée."}
+                >
+                  <Input name="apiKey" type="password" placeholder={org.openaiApiKeyEnc ? "••••••••••••" : "sk-…"} autoComplete="off" disabled={!isAdmin} />
+                </Field>
+                {org.openaiApiKeyEnc && isAdmin && (
+                  <label className="flex items-center gap-2 text-xs sm:col-span-2">
+                    <input type="checkbox" name="clearKey" className="size-4" /> Supprimer la clé enregistrée{env().OPENAI_API_KEY ? " (retour à OPENAI_API_KEY)" : ""}
+                  </label>
+                )}
+                {isAdmin ? (
+                  <div className="sm:col-span-2"><SubmitButton size="sm" pendingText="Vérification…">Enregistrer</SubmitButton></div>
+                ) : (
+                  <p className="text-xs text-muted-foreground sm:col-span-2">Seuls les administrateurs peuvent modifier ces paramètres.</p>
+                )}
+              </ActionForm>
+            )}
             <p>Dépense estimée ce mois : <strong>{spend.toFixed(2)} USD</strong> / budget {env().AI_MONTHLY_BUDGET_USD} USD.</p>
             <p className="text-muted-foreground">Quotas de l&apos;offre : {limits.analysesPerMonth} analyses et {limits.sectionsPerMonth} sections par mois, {limits.maxUsers} utilisateurs.</p>
             <Table>
@@ -130,6 +169,108 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               ))}
               {isAdmin ? <SubmitButton className="self-start">Enregistrer les règles</SubmitButton> : <p className="text-xs text-muted-foreground">Seuls les administrateurs peuvent modifier ces règles.</p>}
             </ActionForm>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Récupération des DCE</CardTitle>
+            <CardDescription>
+              Les avis BOAMP ne contiennent pas le dossier de consultation : il est publié sur le profil acheteur, où son accès est gratuit, libre et direct
+              (art. R2132-2 du code de la commande publique). Pour les plateformes Atexo (PLACE, Maximilien, Solaere, Mégalis…), l&apos;application
+              télécharge le règlement de consultation et le DCE complet en remplissant le formulaire de retrait.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ActionForm action={saveDceSettingsAction} className="flex flex-col gap-4">
+              <Alert tone={dceProblem ? "warning" : "success"}>
+                {dceProblem ? `Retrait automatique inactif : ${dceProblem}.` : `Actif — mode ${dce?.mode === "IDENTIFIED" ? "identifié" : "anonyme"}${dce?.autoRetrieve ? ", retrait automatique des offres ouvertes" : ", à la demande depuis la fiche de l'offre"}.`}
+              </Alert>
+              <div className="grid gap-3 md:grid-cols-3">
+                <Field label="Mode de retrait" className="md:col-span-3" hint="Identifié : l'acheteur vous informera des modifications du DCE et des réponses aux questions des candidats.">
+                  <Select name="mode" defaultValue={dce?.mode ?? "DISABLED"} disabled={!isAdmin}>
+                    <option value="DISABLED">Désactivé</option>
+                    <option value="IDENTIFIED">Identifié (recommandé)</option>
+                    <option value="ANONYMOUS">Anonyme (aucune notification de l&apos;acheteur)</option>
+                  </Select>
+                </Field>
+                <Field label="Prénom"><Input name="firstName" defaultValue={dv.firstName} disabled={!isAdmin} /></Field>
+                <Field label="Nom"><Input name="lastName" defaultValue={dv.lastName} disabled={!isAdmin} /></Field>
+                <Field label="E-mail de contact" hint="Reçoit les notifications des acheteurs."><Input name="email" type="email" defaultValue={dv.email} disabled={!isAdmin} /></Field>
+                <Field label="Raison sociale"><Input name="legalName" defaultValue={dv.legalName} disabled={!isAdmin} /></Field>
+                <Field label="SIRET (14 chiffres)"><Input name="siret" defaultValue={dv.siret} inputMode="numeric" maxLength={17} disabled={!isAdmin} /></Field>
+                <Field label="Téléphone"><Input name="phone" type="tel" defaultValue={dv.phone} disabled={!isAdmin} /></Field>
+                <Field label="Adresse" className="md:col-span-2"><Input name="address" defaultValue={dv.address} disabled={!isAdmin} /></Field>
+                <Field label="Complément d'adresse"><Input name="address2" defaultValue={dv.address2} disabled={!isAdmin} /></Field>
+                <Field label="Code postal"><Input name="postalCode" defaultValue={dv.postalCode} disabled={!isAdmin} /></Field>
+                <Field label="Ville"><Input name="city" defaultValue={dv.city} disabled={!isAdmin} /></Field>
+              </div>
+              <label className="flex items-start gap-2 text-sm">
+                <input type="checkbox" name="acceptTerms" defaultChecked={!!dce?.termsAcceptedAt} disabled={!isAdmin} className="mt-0.5" />
+                <span>
+                  J&apos;accepte, au nom de la société, les conditions générales d&apos;utilisation des plateformes de dématérialisation sur lesquelles
+                  l&apos;application retire les DCE (acceptation requise par le formulaire de retrait).
+                  {dce?.termsAcceptedAt && <span className="text-muted-foreground"> Acceptées le {formatDateTime(dce.termsAcceptedAt)}.</span>}
+                </span>
+              </label>
+              <label className="flex items-start gap-2 text-sm">
+                <input type="checkbox" name="autoRetrieve" defaultChecked={dce?.autoRetrieve ?? false} disabled={!isAdmin} className="mt-0.5" />
+                <span>Retirer automatiquement le DCE des offres ouvertes : nouveaux avis à chaque synchronisation et rattrapage des offres existantes, puis analyse IA du dossier complet. Sinon, le retrait se lance depuis la fiche de l&apos;offre.</span>
+              </label>
+              {isAdmin ? <SubmitButton className="self-start">Enregistrer</SubmitButton> : <p className="text-xs text-muted-foreground">Seuls les administrateurs peuvent modifier ces paramètres.</p>}
+            </ActionForm>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Comptes sur les plateformes acheteurs</CardTitle>
+            <CardDescription>
+              Identifiants de vos comptes entreprise (AWS-Achat, achatpublic, Klekoon…). Les mots de passe sont chiffrés (AES-256-GCM) et ne sont jamais réaffichés.
+              Le retrait automatique sur ces plateformes n&apos;est pas encore pris en charge : le compte est rappelé sur la fiche de l&apos;offre.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {accounts.length > 0 ? (
+              <Table>
+                <thead className="border-b"><tr><Th>Plateforme</Th><Th>Identifiant</Th><Th>Mis à jour</Th><Th /></tr></thead>
+                <tbody className="divide-y">
+                  {accounts.map((a) => (
+                    <tr key={a.id}>
+                      <Td>{KNOWN_PLATFORMS.find((p) => p.host === a.host)?.name ?? a.host}<div className="text-xs text-muted-foreground">{a.host}</div></Td>
+                      <Td>{a.login}</Td>
+                      <Td className="whitespace-nowrap text-xs">{formatDateTime(a.updatedAt)}</Td>
+                      <Td className="text-right">
+                        {isAdmin && (
+                          <ActionForm action={deletePlatformAccountAction} confirm={`Supprimer le compte ${a.host} ?`}>
+                            <input type="hidden" name="id" value={a.id} />
+                            <SubmitButton size="sm" variant="ghost">Supprimer</SubmitButton>
+                          </ActionForm>
+                        )}
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            ) : (
+              <p className="text-sm text-muted-foreground">Aucun compte enregistré.</p>
+            )}
+            {isAdmin && (
+              <details className="rounded-lg border p-4">
+                <summary className="cursor-pointer text-sm font-medium">Ajouter ou modifier un compte</summary>
+                <ActionForm action={savePlatformAccountAction} resetOnSuccess className="mt-4 grid gap-3 md:grid-cols-4">
+                  <Field label="Plateforme (domaine)" hint="Choisissez ou saisissez le domaine.">
+                    <Input name="host" list="platform-hosts" required placeholder="www.marches-publics.info" />
+                    <datalist id="platform-hosts">
+                      {KNOWN_PLATFORMS.map((p) => <option key={p.host} value={p.host}>{p.name}</option>)}
+                    </datalist>
+                  </Field>
+                  <Field label="Identifiant"><Input name="login" required autoComplete="off" /></Field>
+                  <Field label="Mot de passe" hint="Laisser vide pour conserver l'actuel."><Input name="password" type="password" autoComplete="new-password" /></Field>
+                  <div className="flex items-end"><SubmitButton>Enregistrer</SubmitButton></div>
+                </ActionForm>
+              </details>
+            )}
           </CardContent>
         </Card>
 

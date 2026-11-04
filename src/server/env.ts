@@ -12,6 +12,8 @@ const EnvSchema = z.object({
   REDIS_URL: z.string().default("redis://localhost:6379"),
   SESSION_SECRET: z.string().min(32, "SESSION_SECRET doit contenir au moins 32 caractères"),
   COOKIE_SECURE: bool,
+  /** Clé de chiffrement des identifiants de plateformes acheteurs (défaut : dérivée de SESSION_SECRET). */
+  CREDENTIALS_KEY: z.preprocess((v) => (v === "" ? undefined : v), z.string().min(32, "CREDENTIALS_KEY doit contenir au moins 32 caractères").optional()),
 
   STORAGE_DRIVER: z.enum(["local", "s3"]).default("local"),
   STORAGE_LOCAL_DIR: z.string().default("./storage"),
@@ -22,6 +24,12 @@ const EnvSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().optional(),
   S3_FORCE_PATH_STYLE: bool,
   UPLOAD_MAX_MB: z.coerce.number().int().positive().default(50),
+  /** OCR des PDF scannés (Tesseract) : pages traitées au maximum par document, langues, résolution. */
+  OCR_MAX_PAGES: z.coerce.number().int().positive().default(150),
+  OCR_LANGS: z.string().regex(/^[a-z_]+(\+[a-z_]+)*$/).default("fra+eng"),
+  /** Taille maximale d'un DCE retiré automatiquement (archive ZIP complète). */
+  DCE_MAX_MB: z.coerce.number().int().positive().default(300),
+  OCR_DPI: z.coerce.number().int().min(100).max(600).default(300),
 
   AI_ENABLED: bool,
   AI_PROVIDER: z.enum(["openai", "anthropic"]).default("openai"),

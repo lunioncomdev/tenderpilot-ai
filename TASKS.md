@@ -39,8 +39,10 @@ Légende : `[x]` fait et testé · `[~]` fait, vérification incomplète · `[ ]
 - [ ] Checklist documentaire par candidature, mentions dans les commentaires
 - [ ] Bibliothèque documentaire RAG (CV, méthodologies, anciens mémoires) + embeddings optionnels (Voyage)
 - [ ] Export PDF du mémoire
-- [ ] OCR (Tesseract) pour les PDF scannés
+- [x] OCR (Tesseract) pour les PDF scannés
 - [ ] Éditeur riche (WYSIWYG) en complément de l'éditeur Markdown
+- [x] Retrait automatique des DCE sur les plateformes Atexo (PLACE, Maximilien…) ; comptes plateformes chiffrés
+- [ ] Retrait automatique sur AWS-Achat, achatpublic, Klekoon (comptes déjà enregistrables)
 - [ ] Assistant IA contextuel (questions sur un DCE)
 
 ## P2

@@ -1,14 +1,14 @@
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { ExternalLink, Pause, Play, RefreshCw } from "lucide-react";
 import { ActionForm, SubmitButton } from "@/components/form";
 import { parseSort, SortTh, sortRows } from "@/components/sortable";
-import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Field, Input, PageHeader, Table, Td } from "@/components/ui/primitives";
+import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Field, Input, PageHeader, Table, Td } from "@/components/ui/primitives";
 import { formatDateTime } from "@/lib/utils";
 import { requireContext } from "@/server/auth/context";
 import { hasRole } from "@/server/auth/rbac";
 import { ALL_SOURCES, SOURCE_META } from "@/server/connectors/registry";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
-import { saveSourceAction, syncNowAction } from "./actions";
+import { saveSourceAction, syncNowAction, toggleSyncPauseAction } from "./actions";
 
 export const metadata = { title: "Sources et automatisations" };
 
@@ -21,7 +21,8 @@ export default async function SourcesPage({ searchParams }: { searchParams: Prom
   const ctx = await requireContext();
   const sp = await searchParams;
   const runSort = parseSort(sp, RUN_SORT, { key: "started", dir: "desc" });
-  const [configs, runRows] = await Promise.all([
+  const [org, configs, runRows] = await Promise.all([
+    prisma.organization.findUniqueOrThrow({ where: { id: ctx.orgId }, select: { syncPausedAt: true, syncPausedById: true } }),
     prisma.sourceConfig.findMany({ where: { organizationId: ctx.orgId } }),
     prisma.syncRun.findMany({ where: { organizationId: ctx.orgId }, orderBy: { startedAt: "desc" }, take: 30 }),
   ]);
@@ -38,6 +39,10 @@ export default async function SourcesPage({ searchParams }: { searchParams: Prom
     errors: (r) => ((r.errors as unknown[] | null) ?? []).length,
   });
   const isAdmin = hasRole(ctx.role, "ADMIN");
+  const paused = !!org.syncPausedAt;
+  const pausedBy = org.syncPausedById
+    ? await prisma.user.findUnique({ where: { id: org.syncPausedById }, select: { name: true } })
+    : null;
 
   return (
     <>
@@ -45,6 +50,23 @@ export default async function SourcesPage({ searchParams }: { searchParams: Prom
         title="Sources et automatisations"
         description={`Synchronisation automatique selon la planification « ${env().SYNC_CRON} » (fuseau Europe/Paris). Seules des API officielles et ouvertes sont utilisées.`}
       />
+      <Alert tone={paused ? "warning" : "success"} className="mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span>
+            {paused
+              ? `Synchronisation en pause depuis le ${formatDateTime(org.syncPausedAt!)}${pausedBy ? ` (par ${pausedBy.name})` : ""} : aucune synchronisation planifiée ni manuelle n'est lancée.`
+              : "Synchronisation active : les sources activées sont interrogées selon la planification."}
+          </span>
+          {isAdmin && (
+            <ActionForm action={toggleSyncPauseAction} confirm={paused ? undefined : "Mettre en pause toutes les synchronisations ?"}>
+              <input type="hidden" name="intent" value={paused ? "resume" : "pause"} />
+              <SubmitButton size="sm" variant={paused ? "default" : "outline"} pendingText={paused ? "Reprise…" : "Mise en pause…"}>
+                {paused ? <><Play /> Reprendre la synchronisation</> : <><Pause /> Mettre en pause la synchronisation</>}
+              </SubmitButton>
+            </ActionForm>
+          )}
+        </div>
+      </Alert>
       <div className="grid gap-6 lg:grid-cols-2">
         {ALL_SOURCES.map((key) => {
           const cfg = configs.find((c) => c.source === key);
@@ -86,7 +108,7 @@ export default async function SourcesPage({ searchParams }: { searchParams: Prom
                 {hasRole(ctx.role, "MEMBER") && (
                   <ActionForm action={syncNowAction}>
                     <input type="hidden" name="source" value={key} />
-                    <SubmitButton disabled={cfg?.enabled === false} pendingText="Mise en file…">
+                    <SubmitButton disabled={cfg?.enabled === false || paused} pendingText="Mise en file…" title={paused ? "Synchronisation en pause" : undefined}>
                       <RefreshCw /> Synchroniser maintenant
                     </SubmitButton>
                   </ActionForm>

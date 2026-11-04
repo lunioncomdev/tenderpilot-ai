@@ -32,13 +32,15 @@ export async function registerDocument(input: {
   data: Buffer;
   userId?: string | null;
   parentId?: string | null;
+  /** Plafond spécifique (DCE retiré automatiquement) ; défaut : UPLOAD_MAX_MB. */
+  maxMb?: number;
 }): Promise<{ document: TenderDocument; duplicate: boolean }> {
   const tender = await prisma.tender.findFirst({ where: { id: input.tenderId, organizationId: input.orgId }, select: { id: true } });
   if (!tender) throw new NotFoundError("Appel d'offres introuvable");
 
-  const maxBytes = env().UPLOAD_MAX_MB * 1024 * 1024;
+  const maxMb = input.maxMb ?? env().UPLOAD_MAX_MB;
   if (input.data.length === 0) throw new UploadRejectedError("Fichier vide");
-  if (input.data.length > maxBytes) throw new UploadRejectedError(`Fichier trop volumineux (max ${env().UPLOAD_MAX_MB} Mo)`);
+  if (input.data.length > maxMb * 1024 * 1024) throw new UploadRejectedError(`Fichier trop volumineux (max ${maxMb} Mo)`);
 
   const filename = sanitizeFilename(input.filename);
   const type = await detectAllowedType(input.data, filename);
@@ -160,7 +162,11 @@ export async function processDocument(orgId: string, documentId: string): Promis
           status: result.needsOcr ? "NEEDS_OCR" : "EXTRACTED",
           pageCount: result.pageCount,
           charCount,
-          error: result.needsOcr ? "PDF sans couche texte : OCR nécessaire (non disponible dans cette version)" : null,
+          error: result.needsOcr
+            ? result.ocrError ?? (result.ocrPages ? "PDF scanné : texte reconnu par OCR insuffisant (qualité de numérisation ?)" : "PDF sans couche texte : aucun texte reconnu par l'OCR")
+            : result.ocrPages
+              ? `Texte de ${result.ocrPages} page(s) reconnu par OCR : à vérifier`
+              : null,
         },
       }),
     ]);

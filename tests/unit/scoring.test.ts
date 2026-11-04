@@ -33,7 +33,7 @@ function analysis(over: Partial<TenderAnalysisResult> = {}): TenderAnalysisResul
     object: emptyField, buyer: emptyField, consultationReference: emptyField, budget: emptyField,
     budgetAmountEur: null, deadline: emptyField, deadlineIso: null, questionsDeadline: emptyField,
     contractDuration: emptyField, executionDelay: emptyField, lots: [], candidacyConditions: [],
-    technicalRequirements: [], requiredSkills: ["Laravel", "React", "RGAA"], requiredCertifications: [],
+    technicalRequirements: [], requiredSkills: ["Laravel", "React", "RGAA"], technologies: [], requiredCertifications: [],
     minAnnualRevenueEur: null, minReferences: null, deliverables: [], hostingSecurity: emptyField,
     gdpr: emptyField, accessibility: emptyField, ecoDesign: emptyField, maintenance: emptyField, sla: emptyField,
     awardCriteria: [], mandatoryDocuments: [], risks: [], siteVisitMandatory: false,

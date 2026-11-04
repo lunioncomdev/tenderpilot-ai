@@ -11,6 +11,8 @@ import { audit } from "@/server/audit";
 import { requireContext } from "@/server/auth/context";
 import { NotFoundError } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
+import { detectPlatform } from "@/server/dce/platforms";
+import { settingsProblem } from "@/server/dce/retrieve-service";
 import { storage } from "@/server/documents/storage";
 import { createProposal } from "@/server/proposals/proposal-service";
 import { enqueue } from "@/server/queue/queues";
@@ -146,6 +148,22 @@ export async function importNoticePdfAction(_p: ActionState, fd: FormData): Prom
     await enqueue("import-notice-pdf", { orgId: ctx.orgId, tenderId, userId: ctx.userId }, { jobId: `notice-${tenderId}-${Date.now()}`, attempts: 2 });
     revalidatePath(`/tenders/${tenderId}`);
     return { ok: true, message: "Import de l'extrait de l'avis lancé." };
+  });
+}
+
+/** Retrait du DCE sur le profil acheteur (plateformes prises en charge). */
+export async function retrieveDceAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const tenderId = Id.parse(fd.get("tenderId"));
+    const t = await ownTender(ctx.orgId, tenderId);
+    const problem = settingsProblem(await prisma.dceRetrievalSettings.findUnique({ where: { organizationId: ctx.orgId } }));
+    if (problem) return { error: `Retrait impossible : ${problem}.` };
+    if (detectPlatform(t.documentsUrl).kind !== "atexo") return { error: "Retrait automatique non pris en charge pour cette plateforme." };
+    await prisma.tender.update({ where: { id: tenderId }, data: { dceFetchError: null } });
+    await enqueue("retrieve-dce", { orgId: ctx.orgId, tenderId, userId: ctx.userId }, { jobId: `dce-${tenderId}-${Date.now()}`, attempts: 1 });
+    revalidatePath(`/tenders/${tenderId}`);
+    return { ok: true, message: "Retrait du DCE lancé : les pièces apparaîtront ici dans quelques instants." };
   });
 }
 

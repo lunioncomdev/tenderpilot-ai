@@ -36,6 +36,9 @@ export const TenderAnalysisSchema = z.object({
   requiredSkills: z
     .array(z.string())
     .describe("Compétences/technologies exigées, formulées en 1 à 4 mots (ex. « Laravel », « RGAA »)"),
+  technologies: z
+    .array(z.string())
+    .describe("Technologies de l'existant ou imposées : langages, frameworks, CMS, bases de données, serveurs (ex. « Drupal 10 », « Symfony », « PostgreSQL »)"),
   requiredCertifications: z.array(ListItem).describe("Certifications ou qualifications exigées (obligatoires)"),
   minAnnualRevenueEur: z.number().nullable().describe("Chiffre d'affaires minimal exigé, sinon null"),
   minReferences: z.number().nullable().describe("Nombre minimal de références exigé, sinon null"),
@@ -94,7 +97,7 @@ export const ANALYSIS_PARTS = [
     key: "technique",
     focus: "les exigences techniques, compétences, livrables, critères de notation et pièces à fournir",
     schema: TenderAnalysisSchema.pick({
-      technicalRequirements: true, requiredSkills: true, deliverables: true, awardCriteria: true,
+      technicalRequirements: true, requiredSkills: true, technologies: true, deliverables: true, awardCriteria: true,
       mandatoryDocuments: true, injectionAttemptsDetected: true,
     }),
   },

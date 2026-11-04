@@ -24,30 +24,100 @@ enum Role {
 }
 
 model Organization {
-  id        String   @id @default(cuid())
-  name      String
-  plan      Plan     @default(PRO)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String    @id @default(cuid())
+  name            String
+  plan            Plan      @default(PRO)
+  /**
+   * Synchronisation des sources en pause (planifiée et manuelle) depuis cette date.
+   */
+  syncPausedAt    DateTime?
+  syncPausedById  String?
+  /**
+   * Clé API OpenAI propre à l'organisation (chiffrée AES-256-GCM) ; sinon OPENAI_API_KEY.
+   */
+  openaiApiKeyEnc String?
+  /**
+   * Modèle OpenAI choisi par l'organisation ; sinon AI_MODEL.
+   */
+  aiModel         String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  memberships   Membership[]
-  profile       CompanyProfile?
-  references    CompanyReference[]
-  companyDocs   CompanyDocument[]
-  sources       SourceConfig[]
-  syncRuns      SyncRun[]
-  tenders       Tender[]
-  documents     TenderDocument[]
-  chunks        DocumentChunk[]
-  analyses      TenderAnalysis[]
-  scores        TenderScore[]
-  proposals     Proposal[]
-  pieces        ApplicationPiece[]
-  savedSearches SavedSearch[]
-  comments      Comment[]
-  auditLogs     AuditLog[]
-  aiUsage       AiUsageLog[]
-  sessions      Session[]
+  memberships      Membership[]
+  profile          CompanyProfile?
+  references       CompanyReference[]
+  companyDocs      CompanyDocument[]
+  sources          SourceConfig[]
+  syncRuns         SyncRun[]
+  tenders          Tender[]
+  documents        TenderDocument[]
+  chunks           DocumentChunk[]
+  analyses         TenderAnalysis[]
+  scores           TenderScore[]
+  proposals        Proposal[]
+  pieces           ApplicationPiece[]
+  savedSearches    SavedSearch[]
+  comments         Comment[]
+  auditLogs        AuditLog[]
+  aiUsage          AiUsageLog[]
+  sessions         Session[]
+  dceSettings      DceRetrievalSettings?
+  platformAccounts PlatformAccount[]
+}
+
+enum DceRetrievalMode {
+  DISABLED
+  ANONYMOUS
+  IDENTIFIED
+}
+
+/**
+ * Retrait automatique des DCE sur les profils acheteurs. En mode identifié,
+ * ces coordonnées sont transmises à l'acheteur (il notifie alors les
+ * modifications du DCE et les réponses aux questions).
+ */
+model DceRetrievalSettings {
+  id                String           @id @default(cuid())
+  organizationId    String           @unique
+  mode              DceRetrievalMode @default(DISABLED)
+  firstName         String           @default("")
+  lastName          String           @default("")
+  email             String           @default("")
+  phone             String           @default("")
+  legalName         String           @default("")
+  siret             String           @default("") // 14 chiffres
+  address           String           @default("")
+  address2          String           @default("")
+  postalCode        String           @default("")
+  city              String           @default("")
+  /**
+   * Acceptation des CGU des plateformes au nom de la société (prérequis au retrait automatique).
+   */
+  termsAcceptedAt   DateTime?
+  termsAcceptedById String?
+  /**
+   * Retrait automatique à l'import des nouveaux avis (avant l'analyse automatique).
+   */
+  autoRetrieve      Boolean          @default(false)
+  updatedAt         DateTime         @updatedAt
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/**
+ * Compte de l'entreprise sur une plateforme acheteur ; mot de passe chiffré (AES-256-GCM).
+ */
+model PlatformAccount {
+  id             String       @id @default(cuid())
+  organizationId String
+  host           String // nom d'hôte, ex. www.marches-publics.info
+  login          String
+  passwordEnc    String
+  createdById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, host])
 }
 
 model User {
@@ -162,7 +232,9 @@ enum CompanyDocType {
   AUTRE
 }
 
-/** Pièce administrative de l'entreprise, réutilisée dans les dossiers de candidature. */
+/**
+ * Pièce administrative de l'entreprise, réutilisée dans les dossiers de candidature.
+ */
 model CompanyDocument {
   id             String         @id @default(cuid())
   organizationId String
@@ -293,11 +365,13 @@ model Tender {
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
   sourceUpdatedAt  DateTime?
+  dceFetchedAt     DateTime? // dernier retrait automatique du DCE réussi
+  dceFetchError    String? // dernier échec (ou limite) du retrait automatique
 
-  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  assignee     User?            @relation("TenderAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
-  duplicateOf  Tender?          @relation("TenderDuplicates", fields: [duplicateOfId], references: [id], onDelete: SetNull)
-  duplicates   Tender[]         @relation("TenderDuplicates")
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignee     User?              @relation("TenderAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  duplicateOf  Tender?            @relation("TenderDuplicates", fields: [duplicateOfId], references: [id], onDelete: SetNull)
+  duplicates   Tender[]           @relation("TenderDuplicates")
   documents    TenderDocument[]
   analyses     TenderAnalysis[]
   scores       TenderScore[]
@@ -582,7 +656,9 @@ enum PieceStatus {
   NOT_APPLICABLE
 }
 
-/** Pièce à réunir pour déposer la candidature, avec son état d'avancement. */
+/**
+ * Pièce à réunir pour déposer la candidature, avec son état d'avancement.
+ */
 model ApplicationPiece {
   id             String       @id @default(cuid())
   organizationId String

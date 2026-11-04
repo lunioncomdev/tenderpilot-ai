@@ -18,6 +18,9 @@ RUN pnpm prisma generate && pnpm next build
 # par certaines dépendances (liens pnpm), ce qui provoquait des erreurs 500.
 FROM base AS runtime
 ENV NODE_ENV=production
+# OCR des PDF scannés : Poppler (rendu des pages) + Tesseract (français, anglais).
+RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-fra tesseract-ocr-eng \
+  && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 1001 app
 COPY --from=build --chown=app /app ./
 USER app

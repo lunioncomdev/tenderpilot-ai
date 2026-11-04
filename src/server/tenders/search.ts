@@ -125,7 +125,8 @@ export async function searchTenders(orgId: string, input: SearchFilters, now = n
   const select = {
     id: true, externalId: true, publicationRef: true, origin: true, title: true, buyerName: true, buyerCountry: true,
     region: true, estimatedValue: true, currency: true, publishedAt: true, deadlineAt: true, status: true,
-    noticeState: true, preScore: true, procedureType: true, cpvCodes: true,
+    noticeState: true, preScore: true, procedureType: true, cpvCodes: true, description: true,
+    analyses: { where: { status: "DONE" as const }, orderBy: { createdAt: "desc" as const }, take: 1, select: { result: true } },
     scores: { orderBy: { createdAt: "desc" as const }, take: 1, select: { total: true, recommendation: true } },
   } satisfies Prisma.TenderSelect;
 

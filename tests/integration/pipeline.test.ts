@@ -245,7 +245,7 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
         deadlineIso: "2026-11-26T12:00:00+01:00",
         questionsDeadline: f(null), contractDuration: f(null), executionDelay: f(null), lots: [],
         candidacyConditions: [], technicalRequirements: [{ text: "Maintenance évolutive en Java", sources: [{ chunkId: cctpChunk, quote: "développée en Java" }] }],
-        requiredSkills: ["Java", "Maintenance applicative"],
+        requiredSkills: ["Java", "Maintenance applicative"], technologies: ["Java"],
         requiredCertifications: [{ text: "ISO 27001", sources: [{ chunkId: cctpChunk, quote: "certification ISO 27001" }] }],
         minAnnualRevenueEur: null, minReferences: null, deliverables: [],
         hostingSecurity: f(null), gdpr: f(null), accessibility: f(null), ecoDesign: f(null), maintenance: f(null), sla: f(null),

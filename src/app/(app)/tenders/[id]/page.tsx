@@ -16,12 +16,14 @@ import { requireContext } from "@/server/auth/context";
 import { linkCompanyDocs } from "@/server/company/documents";
 import { hasRole } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
+import { detectPlatform } from "@/server/dce/platforms";
+import { settingsProblem } from "@/server/dce/retrieve-service";
 import { env } from "@/server/env";
 import { LEVEL_LABELS, scoreLevel, type CriterionResult, type EliminatoryCheck } from "@/server/scoring/engine";
 import { AnalysisView } from "./analysis-view";
 import { ApplicationPieces } from "./application-pieces";
 import {
-  addCommentAction, applyAction, createProposalAction, deleteDocumentAction, generateApplicationAction, importNoticePdfAction, recomputeScoreAction,
+  addCommentAction, applyAction, retrieveDceAction, createProposalAction, deleteDocumentAction, generateApplicationAction, importNoticePdfAction, recomputeScoreAction,
   reprocessDocumentAction, requestAnalysisAction, setDocumentKindAction, updateWorkflowAction,
 } from "./actions";
 
@@ -52,16 +54,22 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
     },
   });
   if (!tender) notFound();
-  const [members, history, companyDocs] = await Promise.all([
+  const [members, history, companyDocs, dceSettings] = await Promise.all([
     prisma.membership.findMany({ where: { organizationId: ctx.orgId }, include: { user: { select: { id: true, name: true } } } }),
     prisma.auditLog.findMany({ where: { organizationId: ctx.orgId, entityType: "Tender", entityId: tender.id }, orderBy: { createdAt: "desc" }, take: 15, include: { user: { select: { name: true } } } }),
     prisma.companyDocument.findMany({ where: { organizationId: ctx.orgId }, orderBy: { createdAt: "desc" }, select: { id: true, type: true, label: true, filename: true, validUntil: true } }),
+    prisma.dceRetrievalSettings.findUnique({ where: { organizationId: ctx.orgId } }),
   ]);
+  const platform = detectPlatform(tender.documentsUrl);
+  const dceProblem = settingsProblem(dceSettings);
+  const platformAccount = platform.kind === "account" || platform.kind === "generic"
+    ? await prisma.platformAccount.findUnique({ where: { organizationId_host: { organizationId: ctx.orgId, host: platform.host } }, select: { login: true } })
+    : null;
 
   const analysis = tender.analyses[0];
   const score = tender.scores[0];
   const canEdit = hasRole(ctx.role, "MEMBER");
-  const ai = aiStatus();
+  const ai = await aiStatus(ctx.orgId);
   const extracted = tender.documents.filter((d) => d.status === "EXTRACTED" && !d.mimeType.includes("zip")).length;
   const canApply = PRE_APPLICATION_STATUSES.includes(tender.status);
   const inApplication = APPLICATION_STATUSES.includes(tender.status);
@@ -172,10 +180,35 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
             <CardHeader>
               <CardTitle>Dossier de consultation (DCE)</CardTitle>
               <CardDescription>
-                Le dossier de consultation se télécharge sur la plateforme de l&apos;acheteur (bouton « Dossier de consultation »), qui exige généralement un compte : importez-le ensuite ici. Aucun contournement d&apos;accès n&apos;est effectué.
+                Le dossier de consultation est publié sur la plateforme de l&apos;acheteur. Sur les plateformes Atexo (PLACE, Maximilien…), il est retiré automatiquement ;
+                ailleurs, téléchargez-le (bouton « Dossier de consultation ») puis importez-le ici. Aucun contournement d&apos;accès n&apos;est effectué.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
+              {platform.kind === "atexo" && canEdit && (
+                <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {dceProblem ? (
+                      <span>Retrait automatique possible sur {platform.name}, mais {dceProblem}. <Link className="text-primary underline" href="/settings">Configurer</Link></span>
+                    ) : (
+                      <ActionForm action={retrieveDceAction}>
+                        <input type="hidden" name="tenderId" value={tender.id} />
+                        <SubmitButton size="sm" variant="secondary" pendingText="Lancement…"><Download /> Récupérer le DCE sur {platform.name}</SubmitButton>
+                      </ActionForm>
+                    )}
+                    {tender.dceFetchedAt && <span className="text-xs text-muted-foreground">Dernier retrait : {formatDateTime(tender.dceFetchedAt)}</span>}
+                  </div>
+                  {!dceProblem && <span className="text-xs text-muted-foreground">Règlement de consultation et DCE complet, retirés en mode {dceSettings?.mode === "IDENTIFIED" ? `identifié (${dceSettings.legalName})` : "anonyme"}.</span>}
+                </div>
+              )}
+              {(platform.kind === "account" || platform.kind === "generic") && (
+                <p className="rounded-lg border bg-muted/30 p-3 text-sm">
+                  DCE sur <strong>{platform.name}</strong> : retrait automatique non pris en charge.{" "}
+                  {platformAccount ? <>Compte enregistré : <strong>{platformAccount.login}</strong>.</> : platform.kind === "account" ? <>Plateforme à compte : <Link className="text-primary underline" href="/settings">enregistrez vos identifiants</Link>.</> : null}
+                </p>
+              )}
+              {platform.kind === "none" && <p className="text-sm text-muted-foreground">L&apos;avis ne donne pas de lien vers le dossier de consultation (projet d&apos;achat ou avis sans profil acheteur).</p>}
+              {tender.dceFetchError && <Alert tone="warning">Retrait du DCE : {tender.dceFetchError}</Alert>}
               {canEdit && tender.origin === "BOAMP" && !tender.documents.some((d) => d.kind === "AVIS") && (
                 <ActionForm action={importNoticePdfAction} className="flex flex-wrap items-center gap-2">
                   <input type="hidden" name="tenderId" value={tender.id} />
@@ -193,7 +226,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                         <p className="truncate font-medium">{d.filename}</p>
                         <p className="text-xs text-muted-foreground">
                           {(d.sizeBytes / 1024).toFixed(0)} Ko{d.pageCount ? ` · ${d.pageCount} ${d.mimeType.includes("zip") ? "fichier(s)" : "page(s)"}` : ""}
-                          {d.error && <span className="text-danger"> · {d.error}</span>}
+                          {d.error && <span className={d.status === "EXTRACTED" ? "text-warning" : "text-danger"}> · {d.error}</span>}
                         </p>
                       </div>
                       <Badge tone={d.status === "EXTRACTED" ? "success" : d.status === "FAILED" || d.status === "NEEDS_OCR" ? "danger" : "primary"}>{fr.documentStatus[d.status]}</Badge>
