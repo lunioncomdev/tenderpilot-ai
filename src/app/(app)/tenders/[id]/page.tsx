@@ -10,6 +10,7 @@ import { fr } from "@/i18n/fr";
 import { formatDate, formatDateTime, formatEur, NOT_SPECIFIED } from "@/lib/utils";
 import { aiStatus } from "@/server/ai/gateway";
 import { compareLotNumbers, lotLabel, visiblePieces } from "@/server/applications/lots";
+import { loadReadiness } from "@/server/applications/readiness";
 import { APPLICATION_STATUSES, pieceProgress, PRE_APPLICATION_STATUSES } from "@/server/applications/pieces";
 import { boampNoticePdfUrl } from "@/server/connectors/boamp";
 import type { TenderAnalysisResult } from "@/server/analysis/schema";
@@ -25,6 +26,7 @@ import { LEVEL_LABELS, scoreLevel, type CriterionResult, type EliminatoryCheck }
 import { AnalysisView } from "./analysis-view";
 import { ApplicationPieces } from "./application-pieces";
 import { LotSelector } from "./lot-selector";
+import { ReadinessPanel } from "./readiness-panel";
 import {
   preparePricingAction,
   addCommentAction, applyAction, retrieveDceAction, createProposalAction, deleteDocumentAction, generateApplicationAction, importNoticePdfAction, recomputeScoreAction,
@@ -102,6 +104,8 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
     ...selectedLots.map((l) => ({ key: l.id, title: `${fr.pieceGroup.OFFRE} — ${lotLabel(l)}`, group: "OFFRE" as const, lotId: l.id, proposalId: proposalFor(l.id) })),
   ];
   const lotNumber = new Map(lots.map((l) => [l.id, l.number]));
+  const readiness = inApplication || tender.pieces.length ? await loadReadiness(ctx.orgId, tender.id) : null;
+  const isAdmin = hasRole(ctx.role, "ADMIN");
   // Pièces requises dont la pièce du profil manque, est expirée ou expire avant la date limite.
   const docIssues = pieceViews.filter((p) => p.status !== "NOT_APPLICABLE" && p.profile && (p.profile.missing.length > 0 || p.profile.docs.some((d) => d.alert === "expired" || d.alert === "before-deadline")));
   const processing = tender.documents.some((d) => d.status === "UPLOADED" || d.status === "PROCESSING") || analysis?.status === "PENDING" || analysis?.status === "RUNNING";
@@ -142,7 +146,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
       <div className="grid gap-6 xl:grid-cols-3">
         <div className="flex flex-col gap-6 xl:col-span-2">
           {(inApplication || tender.pieces.length > 0) && (
-            <Card>
+            <Card id="dossier" className="scroll-mt-20">
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <CardTitle>Dossier de candidature</CardTitle>
@@ -197,7 +201,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
           )}
 
           {(inApplication || templates.length > 0) && (
-            <Card>
+            <Card id="chiffrage" className="scroll-mt-20">
               <CardHeader>
                 <CardTitle>Chiffrage</CardTitle>
                 <CardDescription>
@@ -449,6 +453,8 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
             </CardContent>
           </Card>
 
+          {readiness && <ReadinessPanel tenderId={tender.id} readiness={readiness} />}
+
           <Card>
             <CardHeader><CardTitle>Workflow</CardTitle></CardHeader>
             <CardContent className="flex flex-col gap-4">
@@ -461,6 +467,17 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                   <option value="">Non affecté</option>
                   {members.map((m) => <option key={m.userId} value={m.userId}>{m.user.name}</option>)}
                 </Select>
+                {readiness && !readiness.ready && isAdmin && (
+                  <details className="rounded-md border p-2 text-xs">
+                    <summary className="cursor-pointer select-none text-muted-foreground">Déroger au contrôle avant dépôt (administrateur)</summary>
+                    <label className="mt-2 flex items-center gap-2">
+                      <input type="checkbox" name="override" />
+                      Passer « Prête à déposer » / « Déposée » malgré {readiness.blockers} point(s) bloquant(s)
+                    </label>
+                    <Textarea name="overrideReason" placeholder="Motif (ex. AE signé déposé à part sur la plateforme)" className="mt-2 min-h-14 text-xs" maxLength={1000} />
+                    <p className="mt-1 text-muted-foreground">La dérogation et son motif sont inscrits au journal d&apos;audit.</p>
+                  </details>
+                )}
                 {canEdit && <SubmitButton variant="outline" size="sm">Enregistrer</SubmitButton>}
               </ActionForm>
               <div className="border-t pt-4">

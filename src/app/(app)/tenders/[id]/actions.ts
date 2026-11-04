@@ -8,10 +8,11 @@ import { runAction } from "@/server/actions";
 import { requestAnalysis } from "@/server/analysis/analysis-service";
 import { addCustomPiece, addLot, deleteCustomPiece, deleteLot, generateApplicationPieces, LotError, setLotSelected, startApplication, updatePiece } from "@/server/applications/application-service";
 import { deletePieceFile } from "@/server/applications/piece-files";
+import { guardStatusChange } from "@/server/applications/readiness";
 import { preparePricing, PricingTemplateError, savePricingEntries, setPricingLot } from "@/server/pricing/pricing-service";
 import { audit } from "@/server/audit";
 import { requireContext } from "@/server/auth/context";
-import { NotFoundError } from "@/server/auth/rbac";
+import { hasRole, NotFoundError } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
 import { detectPlatform } from "@/server/dce/platforms";
 import { settingsProblem } from "@/server/dce/retrieve-service";
@@ -44,6 +45,16 @@ export async function updateWorkflowAction(_p: ActionState, fd: FormData): Promi
       const m = await prisma.membership.findFirst({ where: { userId: assigneeRaw, organizationId: ctx.orgId } });
       if (!m) return { error: "Responsable invalide" };
       assigneeId = assigneeRaw;
+    }
+    // Contrôle « prêt à déposer » avant « Prête à déposer » / « Déposée ».
+    const reason = String(fd.get("overrideReason") ?? "").trim();
+    const guard = await guardStatusChange(ctx.orgId, t.id, { from: t.status, to: status }, { override: fd.get("override") === "on", reason, isAdmin: hasRole(ctx.role, "ADMIN") });
+    if (!guard.allowed) return { error: guard.error };
+    if (guard.overridden) {
+      await audit({
+        orgId: ctx.orgId, userId: ctx.userId, action: "tender.readiness_overridden", entityType: "Tender", entityId: t.id,
+        metadata: { to: status, reason: reason.slice(0, 1000), blockers: guard.overridden.checks.filter((c) => c.level === "blocker").map((c) => c.key) },
+      });
     }
     await prisma.tender.update({ where: { id: t.id }, data: { status, assigneeId } });
     if (t.status !== status) await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "tender.status_changed", entityType: "Tender", entityId: t.id, metadata: { from: t.status, to: status } });
