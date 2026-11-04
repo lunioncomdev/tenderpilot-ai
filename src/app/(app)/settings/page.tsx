@@ -58,8 +58,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const [firstName, ...rest] = ctx.name.split(" ");
   const dv = {
     firstName: dce?.firstName || firstName || "", lastName: dce?.lastName || rest.join(" "), email: dce?.email || ctx.email,
-    phone: dce?.phone ?? "", legalName: dce?.legalName || profile?.legalName || "", siret: dce?.siret || profile?.siren || "",
-    address: dce?.address ?? "", address2: dce?.address2 ?? "", postalCode: dce?.postalCode ?? "", city: dce?.city ?? "",
+    phone: dce?.phone || profile?.phone || "", legalName: dce?.legalName || profile?.legalName || "", siret: dce?.siret || profile?.siren || "",
+    address: dce?.address || profile?.address || "", address2: dce?.address2 ?? "", postalCode: dce?.postalCode || profile?.postalCode || "", city: dce?.city || profile?.city || "",
   };
 
   return (

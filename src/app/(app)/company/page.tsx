@@ -73,6 +73,16 @@ export default async function CompanyPage() {
                 <fieldset disabled={!canEdit} className="contents">
                   <Field label="Raison sociale"><Input name="legalName" defaultValue={p?.legalName ?? ctx.orgName} required /></Field>
                   <Field label="SIREN / SIRET"><Input name="siren" defaultValue={p?.siren ?? ""} inputMode="numeric" /></Field>
+                  <Field label="Forme juridique" hint="SAS, SARL, EURL, EI…"><Input name="legalForm" defaultValue={p?.legalForm ?? ""} maxLength={100} /></Field>
+                  <Field label="Code NAF / APE" hint="Ex. 62.01Z"><Input name="nafCode" defaultValue={p?.nafCode ?? ""} maxLength={10} /></Field>
+                  <Field label="Adresse du siège" className="md:col-span-2"><Input name="address" defaultValue={p?.address ?? ""} maxLength={300} /></Field>
+                  <Field label="Code postal"><Input name="postalCode" defaultValue={p?.postalCode ?? ""} maxLength={10} /></Field>
+                  <Field label="Ville"><Input name="city" defaultValue={p?.city ?? ""} maxLength={100} /></Field>
+                  <Field label="Téléphone"><Input name="phone" type="tel" defaultValue={p?.phone ?? ""} maxLength={30} /></Field>
+                  <Field label="E-mail de contact (marchés)"><Input name="email" type="email" defaultValue={p?.email ?? ""} maxLength={200} /></Field>
+                  <Field label="N° de TVA intracommunautaire"><Input name="vatNumber" defaultValue={p?.vatNumber ?? ""} maxLength={20} /></Field>
+                  <Field label="Représentant légal / signataire" hint="Nom et prénom de la personne habilitée à engager la société."><Input name="legalRepName" defaultValue={p?.legalRepName ?? ""} maxLength={200} /></Field>
+                  <Field label="Qualité du signataire" hint="Président, Gérant, Directeur général…"><Input name="legalRepTitle" defaultValue={p?.legalRepTitle ?? ""} maxLength={100} /></Field>
                   <Field label="Pays d'établissement" hint="Code ISO, ex. FR"><Input name="country" defaultValue={p?.country ?? "FR"} maxLength={2} /></Field>
                   <Field label="Zones de candidature autorisées" hint="Codes pays ISO, ex. FR, BE, LU"><Input name="eligibleCountries" defaultValue={join(p?.eligibleCountries)} /></Field>
                   <Field label="Présentation" className="md:col-span-2"><Textarea name="description" defaultValue={p?.description ?? ""} /></Field>

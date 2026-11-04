@@ -2,6 +2,7 @@ import type { PieceGroup, PieceStatus } from "@prisma/client";
 import { audit } from "../audit";
 import { NotFoundError } from "../auth/rbac";
 import { prisma } from "../db";
+import { storage } from "../documents/storage";
 import type { TenderAnalysisResult } from "../analysis/schema";
 import { isCoveredByProfile, linkCompanyDocs } from "../company/documents";
 import { planApplicationPieces, PRE_APPLICATION_STATUSES } from "./pieces";
@@ -90,7 +91,9 @@ export async function addCustomPiece(orgId: string, tenderId: string, userId: st
 export async function deleteCustomPiece(orgId: string, pieceId: string) {
   const p = await ownPiece(orgId, pieceId);
   if (!p.key.startsWith("custom-")) throw new Error("Marquez plutôt cette pièce « Non requise ».");
+  const files = await prisma.applicationPieceFile.findMany({ where: { pieceId: p.id }, select: { storageKey: true } });
   await prisma.applicationPiece.delete({ where: { id: p.id } });
+  await Promise.all(files.map((f) => storage().delete(f.storageKey).catch(() => undefined)));
   return p;
 }
 

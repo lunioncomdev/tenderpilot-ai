@@ -36,7 +36,16 @@ Légende : `[x]` fait et testé · `[~]` fait, vérification incomplète · `[ ]
 ## P1
 - [ ] Chiffrage avancé (moteur déterministe JH × TJM, scénarios) + DPGF/BPU sur modèle officiel (ExcelJS, cellules/formules préservées)
 - [ ] Alertes e-mail (recherches sauvegardées `alertEnabled`, échéances)
-- [ ] Checklist documentaire par candidature, mentions dans les commentaires
+- [x] Checklist documentaire par candidature (pièces usuelles + exigences du DCE, liées au profil)
+- [x] Fichiers joints aux pièces du dossier (AE signé, BPU rempli, CV…)
+- [x] DC1 / DC2 pré-remplis (DOCX, déterministe) ; identité légale du candidat dans le profil
+- [x] Export du dossier complet en ZIP (`01_Candidature/`, `02_Offre/`, sommaire des manques)
+- [ ] Gestion des lots (candidature par lot : pièces, mémoire, AE)
+- [ ] Contrôle « prêt à déposer » avant `READY_TO_SUBMIT` (pièces, validité, sections validées, contraintes du RC)
+- [ ] Base d'intervenants / CV, attestations de bonne exécution jointes aux références
+- [ ] Groupement et sous-traitance (co-traitants, mandataire, DC4)
+- [ ] Questions à l'acheteur (brouillons depuis l'analyse, suivi des réponses)
+- [ ] Mentions dans les commentaires
 - [ ] Bibliothèque documentaire RAG (CV, méthodologies, anciens mémoires) + embeddings optionnels (Voyage)
 - [ ] Export PDF du mémoire
 - [x] OCR (Tesseract) pour les PDF scannés

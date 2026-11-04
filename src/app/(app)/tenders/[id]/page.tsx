@@ -47,7 +47,10 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
       analyses: { orderBy: { createdAt: "desc" }, take: 1 },
       scores: { orderBy: { createdAt: "desc" }, take: 1 },
       proposals: { select: { id: true, title: true, status: true } },
-      pieces: { orderBy: [{ order: "asc" }, { createdAt: "asc" }] },
+      pieces: {
+        orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+        include: { files: { orderBy: { createdAt: "asc" }, select: { id: true, filename: true, sizeBytes: true } } },
+      },
       comments: { orderBy: { createdAt: "asc" }, include: { author: { select: { name: true } } } },
       duplicateOf: { select: { id: true, title: true, origin: true } },
       duplicates: { select: { id: true, origin: true, publicationRef: true } },
@@ -74,8 +77,8 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
   const canApply = PRE_APPLICATION_STATUSES.includes(tender.status);
   const inApplication = APPLICATION_STATUSES.includes(tender.status);
   const progress = pieceProgress(tender.pieces);
-  const pieceViews = tender.pieces.map(({ id, key, group, label, detail, source, fromDce, status, note }) => ({
-    id, key, group, label, detail, source, fromDce, status, note, profile: linkCompanyDocs({ key, detail }, companyDocs, tender.deadlineAt),
+  const pieceViews = tender.pieces.map(({ id, key, group, label, detail, source, fromDce, status, note, files }) => ({
+    id, key, group, label, detail, source, fromDce, status, note, files, profile: linkCompanyDocs({ key, detail }, companyDocs, tender.deadlineAt),
   }));
   // Pièces requises dont la pièce du profil manque, est expirée ou expire avant la date limite.
   const docIssues = pieceViews.filter((p) => p.status !== "NOT_APPLICABLE" && p.profile && (p.profile.missing.length > 0 || p.profile.docs.some((d) => d.alert === "expired" || d.alert === "before-deadline")));
@@ -121,14 +124,21 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <CardTitle>Dossier de candidature</CardTitle>
-                  {canEdit && (
-                    <ActionForm action={generateApplicationAction}>
-                      <input type="hidden" name="tenderId" value={tender.id} />
-                      <SubmitButton size="sm" variant={tender.pieces.length ? "outline" : "default"} pendingText="Génération…">
-                        <ClipboardList /> {tender.pieces.length ? "Mettre à jour depuis l'analyse" : "Générer le dossier de candidature"}
-                      </SubmitButton>
-                    </ActionForm>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {canEdit && (
+                      <ActionForm action={generateApplicationAction}>
+                        <input type="hidden" name="tenderId" value={tender.id} />
+                        <SubmitButton size="sm" variant={tender.pieces.length ? "outline" : "default"} pendingText="Génération…">
+                          <ClipboardList /> {tender.pieces.length ? "Mettre à jour depuis l'analyse" : "Générer le dossier de candidature"}
+                        </SubmitButton>
+                      </ActionForm>
+                    )}
+                    {tender.pieces.length > 0 && (
+                      <a className={buttonVariants({ size: "sm" })} href={`/api/v1/tenders/${tender.id}/dossier`} download>
+                        <Download /> Télécharger le dossier (ZIP)
+                      </a>
+                    )}
+                  </div>
                 </div>
                 <CardDescription>
                   {tender.pieces.length === 0
@@ -148,7 +158,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                       {docIssues.length} pièce(s) à compléter ou mettre à jour dans le <Link href="/company#pieces" className="underline">profil entreprise</Link> : {docIssues.map((p) => p.label).join(", ")}.
                     </Alert>
                   )}
-                  <ApplicationPieces tenderId={tender.id} canEdit={canEdit} proposalId={tender.proposals[0]?.id} pieces={pieceViews} />
+                  <ApplicationPieces tenderId={tender.id} canEdit={canEdit} proposalId={tender.proposals[0]?.id} pieces={pieceViews} maxMb={env().UPLOAD_MAX_MB} />
                 </CardContent>
               )}
             </Card>

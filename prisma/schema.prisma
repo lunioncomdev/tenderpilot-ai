@@ -56,6 +56,7 @@ model Organization {
   scores           TenderScore[]
   proposals        Proposal[]
   pieces           ApplicationPiece[]
+  pieceFiles       ApplicationPieceFile[]
   savedSearches    SavedSearch[]
   comments         Comment[]
   auditLogs        AuditLog[]
@@ -169,6 +170,17 @@ model CompanyProfile {
   organizationId        String       @unique
   legalName             String
   siren                 String?
+  // Identité légale (formulaires DC1 / DC2, acte d'engagement)
+  legalForm             String       @default("") // SAS, SARL, EI…
+  nafCode               String       @default("") // code APE / NAF, ex. 62.01Z
+  vatNumber             String       @default("") // n° de TVA intracommunautaire
+  address               String       @default("")
+  postalCode            String       @default("")
+  city                  String       @default("")
+  phone                 String       @default("")
+  email                 String       @default("")
+  legalRepName          String       @default("") // représentant légal / signataire habilité
+  legalRepTitle         String       @default("") // qualité : Président, Gérant…
   country               String       @default("FR") // ISO 3166-1 alpha-2
   eligibleCountries     String[]     @default(["FR"])
   description           String       @default("")
@@ -660,26 +672,45 @@ enum PieceStatus {
  * Pièce à réunir pour déposer la candidature, avec son état d'avancement.
  */
 model ApplicationPiece {
-  id             String       @id @default(cuid())
+  id             String                 @id @default(cuid())
   organizationId String
   tenderId       String
   key            String // clé de la pièce usuelle (« dc1 », « memoire »…) ou « dce-<n> » / « custom-<id> »
   group          PieceGroup
   order          Int
   label          String
-  detail         String       @default("") // exigence telle que formulée dans le DCE
-  source         String       @default("") // référence documentaire
-  fromDce        Boolean      @default(false)
-  status         PieceStatus  @default(TODO)
-  note           String       @default("")
+  detail         String                 @default("") // exigence telle que formulée dans le DCE
+  source         String                 @default("") // référence documentaire
+  fromDce        Boolean                @default(false)
+  status         PieceStatus            @default(TODO)
+  note           String                 @default("")
   updatedById    String?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  tender         Tender       @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tender         Tender                 @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  files          ApplicationPieceFile[]
 
   @@unique([tenderId, key])
   @@index([organizationId, tenderId])
+}
+
+/// Fichier propre à une consultation joint à une pièce du dossier (AE signé, BPU rempli, CV…).
+model ApplicationPieceFile {
+  id             String           @id @default(cuid())
+  organizationId String
+  pieceId        String
+  filename       String
+  mimeType       String
+  sizeBytes      Int
+  sha256         String
+  storageKey     String
+  uploadedById   String?
+  createdAt      DateTime         @default(now())
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  piece          ApplicationPiece @relation(fields: [pieceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, pieceId])
 }
 
 // ───────────────────────────── Collaboration ─────────────────────────────

@@ -12,7 +12,7 @@ import { env } from "../env";
 import { COMPANY_DOC_TYPES, defaultValidUntil } from "./documents";
 
 /** PDF, bureautique ou scan (JPG / PNG), d'après le contenu réel du fichier. */
-async function detectCompanyDocType(buf: Buffer, filename: string): Promise<{ ext: string; mime: string } | null> {
+export async function detectCompanyDocType(buf: Buffer, filename: string): Promise<{ ext: string; mime: string } | null> {
   const ft = await fileTypeFromBuffer(buf);
   if (ft && (ft.ext === "jpg" || ft.ext === "png")) return { ext: ft.ext, mime: ft.mime };
   const t = await detectAllowedType(buf, filename);

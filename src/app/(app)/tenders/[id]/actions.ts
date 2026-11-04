@@ -7,6 +7,7 @@ import type { ActionState } from "@/components/form";
 import { runAction } from "@/server/actions";
 import { requestAnalysis } from "@/server/analysis/analysis-service";
 import { addCustomPiece, deleteCustomPiece, generateApplicationPieces, startApplication, updatePiece } from "@/server/applications/application-service";
+import { deletePieceFile } from "@/server/applications/piece-files";
 import { audit } from "@/server/audit";
 import { requireContext } from "@/server/auth/context";
 import { NotFoundError } from "@/server/auth/rbac";
@@ -223,6 +224,16 @@ export async function deletePieceAction(_p: ActionState, fd: FormData): Promise<
     const id = Id.parse(fd.get("pieceId"));
     const p = await deleteCustomPiece(ctx.orgId, id);
     revalidatePath(`/tenders/${p.tenderId}`);
+    return { ok: true };
+  });
+}
+
+export async function deletePieceFileAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const id = Id.parse(fd.get("fileId"));
+    const f = await deletePieceFile(ctx.orgId, id, ctx.userId);
+    revalidatePath(`/tenders/${f.piece.tenderId}`);
     return { ok: true };
   });
 }
