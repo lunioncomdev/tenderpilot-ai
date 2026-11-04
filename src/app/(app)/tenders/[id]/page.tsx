@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Briefcase, ClipboardList, Download, ExternalLink, FileText, RefreshCw, Send, Sparkles, Trash2 } from "lucide-react";
+import { Briefcase, Calculator, ClipboardList, Download, ExternalLink, FileText, RefreshCw, Send, Sparkles, Trash2 } from "lucide-react";
 import { DeadlineBadge, NoticeStateBadge, RecommendationBadge, ScorePill, StatusBadge } from "@/components/badges";
 import { AutoRefresh, UploadDocuments } from "@/components/client-utils";
 import { ActionForm, SubmitButton } from "@/components/form";
@@ -19,10 +19,12 @@ import { prisma } from "@/server/db";
 import { detectPlatform } from "@/server/dce/platforms";
 import { settingsProblem } from "@/server/dce/retrieve-service";
 import { env } from "@/server/env";
+import { loadPricing, priceTemplates } from "@/server/pricing/pricing-service";
 import { LEVEL_LABELS, scoreLevel, type CriterionResult, type EliminatoryCheck } from "@/server/scoring/engine";
 import { AnalysisView } from "./analysis-view";
 import { ApplicationPieces } from "./application-pieces";
 import {
+  preparePricingAction,
   addCommentAction, applyAction, retrieveDceAction, createProposalAction, deleteDocumentAction, generateApplicationAction, importNoticePdfAction, recomputeScoreAction,
   reprocessDocumentAction, requestAnalysisAction, setDocumentKindAction, updateWorkflowAction,
 } from "./actions";
@@ -63,6 +65,11 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
     prisma.companyDocument.findMany({ where: { organizationId: ctx.orgId }, orderBy: { createdAt: "desc" }, select: { id: true, type: true, label: true, filename: true, validUntil: true } }),
     prisma.dceRetrievalSettings.findUnique({ where: { organizationId: ctx.orgId } }),
   ]);
+  const templates = await priceTemplates(ctx.orgId, tender.id);
+  const pricingRows = await prisma.pricing.findMany({ where: { tenderId: tender.id, organizationId: ctx.orgId }, select: { id: true, documentId: true } });
+  const pricings = new Map(
+    await Promise.all(pricingRows.map(async (p) => [p.documentId, { id: p.id, totals: (await loadPricing(ctx.orgId, p.id)).totals }] as const)),
+  );
   const platform = detectPlatform(tender.documentsUrl);
   const dceProblem = settingsProblem(dceSettings);
   const platformAccount = platform.kind === "account" || platform.kind === "generic"
@@ -161,6 +168,53 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                   <ApplicationPieces tenderId={tender.id} canEdit={canEdit} proposalId={tender.proposals[0]?.id} pieces={pieceViews} maxMb={env().UPLOAD_MAX_MB} />
                 </CardContent>
               )}
+            </Card>
+          )}
+
+          {(inApplication || templates.length > 0) && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Chiffrage</CardTitle>
+                <CardDescription>
+                  Bordereaux de prix du DCE (BPU, DPGF, DQE au format .xlsx) remplis à partir des jours par profil et des TJM du profil entreprise. Le modèle de l&apos;acheteur est conservé.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {templates.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Aucun classeur .xlsx dans le DCE. Importez le BPU ou la DPGF au format Excel dans les documents ci-dessous.</p>
+                ) : (
+                  <ul className="divide-y rounded-lg border text-sm">
+                    {templates.map((d) => {
+                      const pr = pricings.get(d.id);
+                      return (
+                        <li key={d.id} className="flex flex-wrap items-center gap-3 p-3">
+                          <Calculator className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-medium">{d.filename} <Badge className="ml-1 align-middle">{fr.documentKind[d.kind]}</Badge></p>
+                            {pr && (
+                              <p className="text-xs text-muted-foreground">
+                                {pr.totals.priced} / {pr.totals.lines} ligne(s) chiffrée(s){pr.totals.totalHt > 0 ? ` — total ${formatEur(pr.totals.totalHt)} HT` : ""}
+                              </p>
+                            )}
+                          </div>
+                          {pr ? (
+                            <div className="flex items-center gap-2">
+                              <Link className={buttonVariants({ size: "sm", variant: "outline" })} href={`/tenders/${tender.id}/pricing/${pr.id}`}>Ouvrir le chiffrage</Link>
+                              <a className={buttonVariants({ size: "sm", variant: "ghost" })} href={`/api/v1/pricings/${pr.id}/export`} download aria-label="Télécharger le bordereau rempli"><Download /></a>
+                            </div>
+                          ) : canEdit ? (
+                            <ActionForm action={preparePricingAction}>
+                              <input type="hidden" name="tenderId" value={tender.id} />
+                              <input type="hidden" name="documentId" value={d.id} />
+                              <SubmitButton size="sm" variant="outline" pendingText="Analyse du bordereau…"><Calculator /> Chiffrer ce bordereau</SubmitButton>
+                            </ActionForm>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </CardContent>
             </Card>
           )}
 

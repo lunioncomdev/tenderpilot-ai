@@ -8,6 +8,7 @@ import { runAction } from "@/server/actions";
 import { requestAnalysis } from "@/server/analysis/analysis-service";
 import { addCustomPiece, deleteCustomPiece, generateApplicationPieces, startApplication, updatePiece } from "@/server/applications/application-service";
 import { deletePieceFile } from "@/server/applications/piece-files";
+import { preparePricing, PricingTemplateError, savePricingEntries } from "@/server/pricing/pricing-service";
 import { audit } from "@/server/audit";
 import { requireContext } from "@/server/auth/context";
 import { NotFoundError } from "@/server/auth/rbac";
@@ -236,4 +237,65 @@ export async function deletePieceFileAction(_p: ActionState, fd: FormData): Prom
     revalidatePath(`/tenders/${f.piece.tenderId}`);
     return { ok: true };
   });
+}
+
+export async function preparePricingAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  let target: string | null = null;
+  const res = await runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const tenderId = Id.parse(fd.get("tenderId"));
+    const documentId = Id.parse(fd.get("documentId"));
+    try {
+      const { pricing } = await preparePricing(ctx.orgId, tenderId, documentId, ctx.userId);
+      target = `/tenders/${tenderId}/pricing/${pricing.id}`;
+      revalidatePath(target);
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof PricingTemplateError) return { error: err.message };
+      throw err;
+    }
+  });
+  if (target) redirect(target);
+  return res;
+}
+
+const PricingPayload = z.object({
+  adjustmentPercent: z.number().min(-90).max(500),
+  profiles: z.array(z.string().max(100)).max(50),
+  lines: z
+    .array(z.object({
+      id: Id,
+      manualPrice: z.number().min(0).max(1e9).nullable(),
+      days: z.record(z.string().max(100), z.number().min(0).max(100_000)),
+      note: z.string().max(1000),
+    }))
+    .max(5000),
+});
+
+export async function savePricingAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const pricingId = Id.parse(fd.get("pricingId"));
+    const payload = PricingPayload.parse(JSON.parse(String(fd.get("payload") ?? "{}")));
+    const p = await savePricingEntries(ctx.orgId, pricingId, ctx.userId, payload);
+    revalidatePath(`/tenders/${p.tenderId}/pricing/${p.id}`);
+    revalidatePath(`/tenders/${p.tenderId}`);
+    return { ok: true, message: "Chiffrage enregistré." };
+  });
+}
+
+export async function deletePricingAction(_p: ActionState, fd: FormData): Promise<ActionState> {
+  let target: string | null = null;
+  const res = await runAction(async () => {
+    const ctx = await requireContext("MEMBER");
+    const pricingId = Id.parse(fd.get("pricingId"));
+    const p = await prisma.pricing.findFirst({ where: { id: pricingId, organizationId: ctx.orgId } });
+    if (!p) throw new NotFoundError("Chiffrage introuvable");
+    await prisma.pricing.delete({ where: { id: p.id } });
+    await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "pricing.deleted", entityType: "Tender", entityId: p.tenderId, metadata: { pricingId: p.id } });
+    target = `/tenders/${p.tenderId}`;
+    return { ok: true };
+  });
+  if (target) redirect(target);
+  return res;
 }

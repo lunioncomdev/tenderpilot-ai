@@ -9,6 +9,7 @@ import { audit } from "@/server/audit";
 import { requireContext } from "@/server/auth/context";
 import { deleteCompanyDocument } from "@/server/company/company-document-service";
 import { prisma } from "@/server/db";
+import { parseRatesText } from "@/server/pricing/compute";
 import { computePreScore } from "@/server/scoring/prescore";
 
 const list = z.string().optional().transform((s) => splitList(s ?? ""));
@@ -51,6 +52,15 @@ const ProfileSchema = z
     gdprCommitments: text(),
     ecoDesign: text(),
     accessibility: text(),
+    dailyRates: z
+      .string()
+      .max(5000)
+      .optional()
+      .transform((s, ctx) => {
+        const { rates, errors } = parseRatesText(s ?? "");
+        if (errors.length) ctx.addIssue({ code: "custom", message: `TJM illisible : « ${errors[0]} » (format attendu : Profil : 750)` });
+        return rates;
+      }),
   })
   .refine((d) => d.minBudgetEur === null || d.maxBudgetEur === null || d.minBudgetEur <= d.maxBudgetEur, {
     message: "Le budget minimum doit être inférieur au maximum",

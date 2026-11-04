@@ -6,6 +6,7 @@ import { NotFoundError } from "../auth/rbac";
 import { linkCompanyDocs, type PieceDocAlert } from "../company/documents";
 import { prisma } from "../db";
 import { storage } from "../documents/storage";
+import { exportFilledTemplate, loadPricing } from "../pricing/pricing-service";
 import { exportProposalDocx } from "../proposals/proposal-export";
 import { countTodos, formContent, renderFormDocx, type FormContext, type FormKind } from "./forms-docx";
 
@@ -24,7 +25,11 @@ export type DossierCompanyDoc = { id: string; type: CompanyDocType; label: strin
 
 export type DossierSource =
   | { kind: "storage"; storageKey: string }
-  | { kind: "generated"; what: FormKind | "memoire" };
+  | { kind: "generated"; what: FormKind | "memoire" }
+  | { kind: "pricing"; pricingId: string };
+
+/** Bordereau de prix chiffré dans l'application. */
+export type DossierPricing = { id: string; filename: string; priced: number; missing: number };
 
 export type DossierEntry = { path: string; source: DossierSource };
 
@@ -80,6 +85,7 @@ export function planDossier(input: {
   companyDocs: DossierCompanyDoc[];
   deadline: Date | null;
   hasProposal: boolean;
+  pricings?: DossierPricing[];
   now?: Date;
 }): DossierPlan {
   const entries: DossierEntry[] = [];
@@ -119,6 +125,12 @@ export function planDossier(input: {
         for (const m of linked.missing) issues.push(`absente du profil : ${m}`);
       }
       if (piece.key === "memoire" && !input.hasProposal) issues.push("mémoire technique non créé");
+      if (piece.key === "prix") {
+        for (const pr of (input.pricings ?? []).filter((p) => p.priced > 0)) {
+          sources.push({ name: `${baseOf(pr.filename)}_complete`, ext: ".xlsx", source: { kind: "pricing", pricingId: pr.id } });
+          issues.push(pr.missing ? `${pr.filename} : ${pr.missing} ligne(s) non chiffrée(s)` : `${pr.filename} : rempli depuis le chiffrage, vérifier les totaux`);
+        }
+      }
       if (!sources.length && !issues.length) issues.push("aucun fichier joint");
     }
     if (piece.status !== "DONE") issues.push(`statut « ${piece.status === "TODO" ? "À faire" : "En cours"} »`);
@@ -260,13 +272,21 @@ export async function buildDossierZip(orgId: string, tenderId: string, fallbackC
     select: { id: true, type: true, label: true, filename: true, storageKey: true, validUntil: true },
     orderBy: { createdAt: "asc" },
   });
-  const plan = planDossier({ pieces: tender.pieces, companyDocs, deadline: tender.deadlineAt, hasProposal: tender.proposals.length > 0 });
+  const pricingRows = await prisma.pricing.findMany({ where: { tenderId, organizationId: orgId }, select: { id: true, document: { select: { filename: true } } }, orderBy: { createdAt: "asc" } });
+  const pricings: DossierPricing[] = await Promise.all(
+    pricingRows.map(async (p) => {
+      const { totals } = await loadPricing(orgId, p.id);
+      return { id: p.id, filename: p.document.filename, priced: totals.priced, missing: totals.lines - totals.priced };
+    }),
+  );
+  const plan = planDossier({ pieces: tender.pieces, companyDocs, deadline: tender.deadlineAt, hasProposal: tender.proposals.length > 0, pricings });
 
   const ctx = await loadFormContext(orgId, tenderId, fallbackCompanyName);
   const zip = new JSZip();
   for (const e of plan.entries) {
     let data: Buffer;
     if (e.source.kind === "storage") data = await storage().get(e.source.storageKey);
+    else if (e.source.kind === "pricing") data = (await exportFilledTemplate(orgId, e.source.pricingId)).buf;
     else if (e.source.what === "memoire") data = (await exportProposalDocx(orgId, tender.proposals[0].id, fallbackCompanyName))!.buf;
     else data = await renderFormDocx(formContent(e.source.what, ctx), ctx.company.legalName);
     zip.file(e.path, data);

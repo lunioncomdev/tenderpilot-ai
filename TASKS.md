@@ -34,7 +34,8 @@ Légende : `[x]` fait et testé · `[~]` fait, vérification incomplète · `[ ]
 - [x] README, .env.example, CI GitHub Actions
 
 ## P1
-- [ ] Chiffrage avancé (moteur déterministe JH × TJM, scénarios) + DPGF/BPU sur modèle officiel (ExcelJS, cellules/formules préservées)
+- [x] Chiffrage : moteur déterministe JH × TJM + ajustement global, BPU/DPGF/DQE remplis sur le modèle officiel (ExcelJS, formules préservées), intégré au dossier ZIP
+- [ ] Chiffrage : scénarios comparés, marge cible / coût de revient, import des .xls (ancien format)
 - [ ] Alertes e-mail (recherches sauvegardées `alertEnabled`, échéances)
 - [x] Checklist documentaire par candidature (pièces usuelles + exigences du DCE, liées au profil)
 - [x] Fichiers joints aux pièces du dossier (AE signé, BPU rempli, CV…)

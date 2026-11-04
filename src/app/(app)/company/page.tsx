@@ -7,6 +7,7 @@ import { requireContext } from "@/server/auth/context";
 import { hasRole } from "@/server/auth/rbac";
 import { COMPANY_DOC_TYPES, EXPIRY_WARNING_DAYS, validityOf, type Validity } from "@/server/company/documents";
 import { prisma } from "@/server/db";
+import { formatRatesText } from "@/server/pricing/compute";
 import { env } from "@/server/env";
 import { addReferenceAction, deleteCompanyDocumentAction, deleteReferenceAction, savePrivacyAction, saveProfileAction } from "./actions";
 import { CompanyDocUpload } from "./company-doc-upload";
@@ -108,6 +109,9 @@ export default async function CompanyPage() {
                   <Field label="Engagements RGPD"><Textarea name="gdprCommitments" defaultValue={p?.gdprCommitments ?? ""} /></Field>
                   <Field label="Éco-conception"><Textarea name="ecoDesign" defaultValue={p?.ecoDesign ?? ""} /></Field>
                   <Field label="Accessibilité (RGAA)" className="md:col-span-2"><Textarea name="accessibility" defaultValue={p?.accessibility ?? ""} /></Field>
+                  <Field label="Profils et TJM (€ HT / jour)" className="md:col-span-2" hint="Un profil par ligne, ex. « Chef de projet : 750 ». Utilisés pour chiffrer les BPU / DPGF (jours × TJM).">
+                    <Textarea name="dailyRates" defaultValue={formatRatesText(p?.dailyRates)} placeholder={"Directeur de projet : 950\nChef de projet : 750\nDéveloppeur senior : 650\nDéveloppeur : 550"} />
+                  </Field>
                 </fieldset>
                 {canEdit && (
                   <div className="md:col-span-2">

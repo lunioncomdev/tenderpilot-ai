@@ -57,6 +57,7 @@ model Organization {
   proposals        Proposal[]
   pieces           ApplicationPiece[]
   pieceFiles       ApplicationPieceFile[]
+  pricings         Pricing[]
   savedSearches    SavedSearch[]
   comments         Comment[]
   auditLogs        AuditLog[]
@@ -389,6 +390,7 @@ model Tender {
   scores       TenderScore[]
   proposals    Proposal[]
   pieces       ApplicationPiece[]
+  pricings     Pricing[]
   comments     Comment[]
 
   @@unique([organizationId, origin, externalId])
@@ -458,6 +460,7 @@ model TenderDocument {
   tender         Tender           @relation(fields: [tenderId], references: [id], onDelete: Cascade)
   parent         TenderDocument?  @relation("DocumentParent", fields: [parentId], references: [id], onDelete: Cascade)
   children       TenderDocument[] @relation("DocumentParent")
+  pricings       Pricing[]
   chunks         DocumentChunk[]
 
   @@unique([tenderId, sha256])
@@ -743,4 +746,52 @@ model AuditLog {
 
   @@index([organizationId, createdAt])
   @@index([entityType, entityId])
+}
+
+/// Chiffrage d'un bordereau de prix du DCE (BPU / DPGF / DQE au format XLSX).
+model Pricing {
+  id                String         @id @default(cuid())
+  organizationId    String
+  tenderId          String
+  documentId        String
+  /// Ajustement appliqué aux prix calculés (JH × TJM), en % : -5 = remise de 5 %.
+  adjustmentPercent Float          @default(0)
+  /// Avertissements de l'analyse du modèle (feuilles ignorées, colonnes non reconnues…).
+  warnings          String[]       @default([])
+  createdById       String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tender            Tender         @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  document          TenderDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  lines             PricingLine[]
+
+  @@unique([tenderId, documentId])
+  @@index([organizationId, tenderId])
+}
+
+/// Ligne du bordereau : cellule de prix à remplir dans le modèle d'origine.
+model PricingLine {
+  id          String  @id @default(cuid())
+  pricingId   String
+  order       Int
+  sheet       String
+  row         Int
+  isHeading   Boolean @default(false)
+  reference   String  @default("") // n° de prix / poste
+  designation String
+  unit        String  @default("")
+  quantity    Float?
+  /// Cellule à remplir (ex. « E12 ») ; null pour un titre de section.
+  priceCell   String?
+  /// Cellule du montant à remplir si elle est vide (DPGF sans formule).
+  amountCell  String?
+  /// Prix unitaire HT saisi directement (prioritaire sur le calcul).
+  manualPrice Float?
+  /// Jours par profil : { "Chef de projet": 2, "Développeur": 5 }.
+  days        Json    @default("{}")
+  note        String  @default("")
+  pricing     Pricing @relation(fields: [pricingId], references: [id], onDelete: Cascade)
+
+  @@unique([pricingId, sheet, row])
 }
