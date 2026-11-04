@@ -9,6 +9,7 @@ import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle
 import { fr } from "@/i18n/fr";
 import { formatDate, formatDateTime, formatEur, NOT_SPECIFIED } from "@/lib/utils";
 import { aiStatus } from "@/server/ai/gateway";
+import { compareLotNumbers, lotLabel, visiblePieces } from "@/server/applications/lots";
 import { APPLICATION_STATUSES, pieceProgress, PRE_APPLICATION_STATUSES } from "@/server/applications/pieces";
 import { boampNoticePdfUrl } from "@/server/connectors/boamp";
 import type { TenderAnalysisResult } from "@/server/analysis/schema";
@@ -23,6 +24,7 @@ import { loadPricing, priceTemplates } from "@/server/pricing/pricing-service";
 import { LEVEL_LABELS, scoreLevel, type CriterionResult, type EliminatoryCheck } from "@/server/scoring/engine";
 import { AnalysisView } from "./analysis-view";
 import { ApplicationPieces } from "./application-pieces";
+import { LotSelector } from "./lot-selector";
 import {
   preparePricingAction,
   addCommentAction, applyAction, retrieveDceAction, createProposalAction, deleteDocumentAction, generateApplicationAction, importNoticePdfAction, recomputeScoreAction,
@@ -48,7 +50,8 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
       documents: { orderBy: { createdAt: "asc" } },
       analyses: { orderBy: { createdAt: "desc" }, take: 1 },
       scores: { orderBy: { createdAt: "desc" }, take: 1 },
-      proposals: { select: { id: true, title: true, status: true } },
+      proposals: { select: { id: true, title: true, status: true, lotId: true }, orderBy: { createdAt: "asc" } },
+      lots: true,
       pieces: {
         orderBy: [{ order: "asc" }, { createdAt: "asc" }],
         include: { files: { orderBy: { createdAt: "asc" }, select: { id: true, filename: true, sizeBytes: true } } },
@@ -66,9 +69,9 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
     prisma.dceRetrievalSettings.findUnique({ where: { organizationId: ctx.orgId } }),
   ]);
   const templates = await priceTemplates(ctx.orgId, tender.id);
-  const pricingRows = await prisma.pricing.findMany({ where: { tenderId: tender.id, organizationId: ctx.orgId }, select: { id: true, documentId: true } });
+  const pricingRows = await prisma.pricing.findMany({ where: { tenderId: tender.id, organizationId: ctx.orgId }, select: { id: true, documentId: true, lotId: true } });
   const pricings = new Map(
-    await Promise.all(pricingRows.map(async (p) => [p.documentId, { id: p.id, totals: (await loadPricing(ctx.orgId, p.id)).totals }] as const)),
+    await Promise.all(pricingRows.map(async (p) => [p.documentId, { id: p.id, lotId: p.lotId, totals: (await loadPricing(ctx.orgId, p.id)).totals }] as const)),
   );
   const platform = detectPlatform(tender.documentsUrl);
   const dceProblem = settingsProblem(dceSettings);
@@ -83,10 +86,22 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
   const extracted = tender.documents.filter((d) => d.status === "EXTRACTED" && !d.mimeType.includes("zip")).length;
   const canApply = PRE_APPLICATION_STATUSES.includes(tender.status);
   const inApplication = APPLICATION_STATUSES.includes(tender.status);
-  const progress = pieceProgress(tender.pieces);
-  const pieceViews = tender.pieces.map(({ id, key, group, label, detail, source, fromDce, status, note, files }) => ({
-    id, key, group, label, detail, source, fromDce, status, note, files, profile: linkCompanyDocs({ key, detail }, companyDocs, tender.deadlineAt),
+  const lots = [...tender.lots].sort((a, b) => compareLotNumbers(a.number, b.number));
+  const selectedLots = lots.filter((l) => l.selected);
+  const pieces = visiblePieces(tender.pieces, selectedLots.map((l) => l.id));
+  const hiddenLotPieces = tender.pieces.filter((p) => p.lotId && !selectedLots.some((l) => l.id === p.lotId)).length;
+  const progress = pieceProgress(pieces);
+  const pieceViews = pieces.map(({ id, key, group, label, detail, source, fromDce, status, note, files, lotId }) => ({
+    id, key, group, label, detail, source, fromDce, status, note, files, lotId, profile: linkCompanyDocs({ key, detail }, companyDocs, tender.deadlineAt),
   }));
+  const proposalFor = (lotId: string | null) => tender.proposals.find((p) => p.lotId === lotId)?.id;
+  const canCreateProposal = canEdit && analysis?.status === "DONE";
+  const pieceSections = [
+    { key: "candidature", title: fr.pieceGroup.CANDIDATURE, group: "CANDIDATURE" as const, lotId: null, proposalId: undefined },
+    { key: "offre", title: selectedLots.length ? `${fr.pieceGroup.OFFRE} — pièces communes à tous les lots` : fr.pieceGroup.OFFRE, group: "OFFRE" as const, lotId: null, proposalId: proposalFor(null) },
+    ...selectedLots.map((l) => ({ key: l.id, title: `${fr.pieceGroup.OFFRE} — ${lotLabel(l)}`, group: "OFFRE" as const, lotId: l.id, proposalId: proposalFor(l.id) })),
+  ];
+  const lotNumber = new Map(lots.map((l) => [l.id, l.number]));
   // Pièces requises dont la pièce du profil manque, est expirée ou expire avant la date limite.
   const docIssues = pieceViews.filter((p) => p.status !== "NOT_APPLICABLE" && p.profile && (p.profile.missing.length > 0 || p.profile.docs.some((d) => d.alert === "expired" || d.alert === "before-deadline")));
   const processing = tender.documents.some((d) => d.status === "UPLOADED" || d.status === "PROCESSING") || analysis?.status === "PENDING" || analysis?.status === "RUNNING";
@@ -155,6 +170,16 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                     : `${progress.done} / ${progress.total} pièce(s) prête(s). Les pièces « Non requises » ne comptent pas.`}
                 </CardDescription>
               </CardHeader>
+              {(lots.length > 0 || canEdit) && (
+                <CardContent className={tender.pieces.length ? "pb-0" : undefined}>
+                  <LotSelector
+                    tenderId={tender.id}
+                    canEdit={canEdit}
+                    hiddenPieces={hiddenLotPieces}
+                    lots={lots.map((l) => ({ id: l.id, number: l.number, title: l.title, selected: l.selected, fromAnalysis: l.fromAnalysis }))}
+                  />
+                </CardContent>
+              )}
               {tender.pieces.length > 0 && (
                 <CardContent className="flex flex-col gap-4">
                   <div className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={progress.done} aria-valuemax={progress.total} aria-label="Avancement du dossier">
@@ -165,7 +190,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                       {docIssues.length} pièce(s) à compléter ou mettre à jour dans le <Link href="/company#pieces" className="underline">profil entreprise</Link> : {docIssues.map((p) => p.label).join(", ")}.
                     </Alert>
                   )}
-                  <ApplicationPieces tenderId={tender.id} canEdit={canEdit} proposalId={tender.proposals[0]?.id} pieces={pieceViews} maxMb={env().UPLOAD_MAX_MB} />
+                  <ApplicationPieces tenderId={tender.id} canEdit={canEdit} canCreateProposal={canCreateProposal} sections={pieceSections} pieces={pieceViews} maxMb={env().UPLOAD_MAX_MB} />
                 </CardContent>
               )}
             </Card>
@@ -190,7 +215,10 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                         <li key={d.id} className="flex flex-wrap items-center gap-3 p-3">
                           <Calculator className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                           <div className="min-w-0 flex-1">
-                            <p className="truncate font-medium">{d.filename} <Badge className="ml-1 align-middle">{fr.documentKind[d.kind]}</Badge></p>
+                            <p className="truncate font-medium">
+                              {d.filename} <Badge className="ml-1 align-middle">{fr.documentKind[d.kind]}</Badge>
+                              {pr?.lotId && lotNumber.has(pr.lotId) && <Badge tone="primary" className="ml-1 align-middle">Lot {lotNumber.get(pr.lotId)}</Badge>}
+                            </p>
                             {pr && (
                               <p className="text-xs text-muted-foreground">
                                 {pr.totals.priced} / {pr.totals.lines} ligne(s) chiffrée(s){pr.totals.totalHt > 0 ? ` — total ${formatEur(pr.totals.totalHt)} HT` : ""}
@@ -436,10 +464,24 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                 {canEdit && <SubmitButton variant="outline" size="sm">Enregistrer</SubmitButton>}
               </ActionForm>
               <div className="border-t pt-4">
-                {tender.proposals.length ? (
-                  tender.proposals.map((p) => (
-                    <Link key={p.id} href={`/proposals/${p.id}`} className={buttonVariants({ variant: "secondary" }) + " w-full"}><FileText /> Ouvrir le mémoire technique</Link>
-                  ))
+                {selectedLots.length ? (
+                  <div className="flex flex-col gap-2">
+                    {selectedLots.map((l) => {
+                      const pid = proposalFor(l.id);
+                      return pid ? (
+                        <Link key={l.id} href={`/proposals/${pid}`} className={buttonVariants({ variant: "secondary" }) + " w-full"}><FileText /> Mémoire — lot {l.number}</Link>
+                      ) : canEdit ? (
+                        <ActionForm key={l.id} action={createProposalAction}>
+                          <input type="hidden" name="tenderId" value={tender.id} />
+                          <input type="hidden" name="lotId" value={l.id} />
+                          <SubmitButton variant="outline" className="w-full" disabled={analysis?.status !== "DONE"}><FileText /> Préparer le mémoire du lot {l.number}</SubmitButton>
+                        </ActionForm>
+                      ) : null;
+                    })}
+                    {analysis?.status !== "DONE" && canEdit && <p className="text-xs text-muted-foreground">Disponible après l&apos;analyse du DCE.</p>}
+                  </div>
+                ) : proposalFor(null) ? (
+                  <Link href={`/proposals/${proposalFor(null)}`} className={buttonVariants({ variant: "secondary" }) + " w-full"}><FileText /> Ouvrir le mémoire technique</Link>
                 ) : canEdit ? (
                   <ActionForm action={createProposalAction}>
                     <input type="hidden" name="tenderId" value={tender.id} />

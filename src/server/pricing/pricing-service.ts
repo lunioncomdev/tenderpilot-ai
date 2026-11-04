@@ -4,6 +4,7 @@ import { audit } from "../audit";
 import { NotFoundError } from "../auth/rbac";
 import { prisma } from "../db";
 import { storage } from "../documents/storage";
+import { guessLotNumber } from "../applications/lots";
 import { linePrice, parseRates, pricingTotals, type Days } from "./compute";
 import { analyzeTemplate, fillTemplate } from "./template";
 
@@ -55,9 +56,12 @@ export async function preparePricing(orgId: string, tenderId: string, documentId
     throw new PricingTemplateError(warnings[0] ?? "Aucune ligne de prix à remplir n'a été trouvée dans ce classeur.");
   }
 
+  // Lot deviné d'après le nom du fichier (« DPGF_Lot2.xlsx »), modifiable ensuite.
+  const guessed = guessLotNumber(doc.filename);
+  const lot = guessed ? await prisma.tenderLot.findUnique({ where: { tenderId_number: { tenderId, number: guessed } }, select: { id: true } }) : null;
   const pricing = await prisma.pricing.upsert({
     where: { tenderId_documentId: { tenderId, documentId } },
-    create: { organizationId: orgId, tenderId, documentId, warnings, createdById: userId },
+    create: { organizationId: orgId, tenderId, documentId, warnings, createdById: userId, lotId: lot?.id ?? null },
     update: { warnings },
     include: { lines: { select: { id: true, sheet: true, row: true, designation: true } } },
   });
@@ -141,4 +145,12 @@ export async function exportFilledTemplate(orgId: string, pricingId: string) {
   const buf = Buffer.from(await wb.xlsx.writeBuffer());
   const base = pricing.document.filename.replace(/\.xlsx$/i, "");
   return { buf, filename: `${base}_complete.xlsx`, written, skipped, missing: lines.filter((l) => !l.isHeading && l.price.unitPrice === null).length };
+}
+
+export async function setPricingLot(orgId: string, pricingId: string, lotId: string | null, userId: string) {
+  const p = await ownPricing(orgId, pricingId);
+  if (lotId && !(await prisma.tenderLot.count({ where: { id: lotId, tenderId: p.tenderId, organizationId: orgId } }))) throw new NotFoundError("Lot introuvable");
+  await prisma.pricing.update({ where: { id: p.id }, data: { lotId } });
+  await audit({ orgId, userId, action: "pricing.lot_set", entityType: "Tender", entityId: p.tenderId, metadata: { pricingId: p.id, lotId } });
+  return p;
 }

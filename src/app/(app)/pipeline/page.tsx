@@ -5,6 +5,7 @@ import { parseSort, SortTh, sortRows } from "@/components/sortable";
 import { Card, EmptyState, PageHeader, Table, Td } from "@/components/ui/primitives";
 import { PIPELINE_ORDER } from "@/i18n/fr";
 import { cn, formatDate, formatEur } from "@/lib/utils";
+import { visiblePieces } from "@/server/applications/lots";
 import { pieceProgress } from "@/server/applications/pieces";
 import { requireContext } from "@/server/auth/context";
 import { prisma } from "@/server/db";
@@ -33,7 +34,7 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
   const sort = parseSort(sp, SORT_KEYS, { key: "deadline", dir: tab === "terminees" ? "desc" : "asc" });
   const base = { organizationId: ctx.orgId, ...(mine ? { assigneeId: ctx.userId } : {}) };
 
-  const [counts, rows] = await Promise.all([
+  const [counts, rawRows] = await Promise.all([
     prisma.tender.groupBy({ by: ["status"], where: base, _count: { _all: true } }),
     prisma.tender.findMany({
       where: { ...base, status: { in: TABS[tab].statuses } },
@@ -43,16 +44,26 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
         id: true, title: true, buyerName: true, deadlineAt: true, status: true, preScore: true,
         estimatedValue: true, currency: true,
         assignee: { select: { name: true } },
-        pieces: { select: { status: true } },
+        pieces: { select: { status: true, key: true, lotId: true } },
+        lots: { where: { selected: true }, select: { id: true } },
         scores: { orderBy: { createdAt: "desc" }, take: 1, select: { total: true, recommendation: true } },
         proposals: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-          select: { sections: { select: { status: true } }, compliance: { select: { status: true } } },
+          orderBy: { createdAt: "asc" },
+          select: { lotId: true, sections: { select: { status: true } }, compliance: { select: { status: true } } },
         },
       },
     }),
   ]);
+  // Lots retenus : pièces à fournir et mémoires de ces lots, agrégés.
+  const rows = rawRows.map((t) => {
+    const lotIds = t.lots.map((l) => l.id);
+    const active = t.proposals.filter((p) => (lotIds.length ? p.lotId !== null && lotIds.includes(p.lotId) : p.lotId === null));
+    return {
+      ...t,
+      pieces: visiblePieces(t.pieces, lotIds),
+      proposals: active.length ? [{ sections: active.flatMap((p) => p.sections), compliance: active.flatMap((p) => p.compliance) }] : [],
+    };
+  });
   const ratio = (items: Array<{ status: string }> | undefined, ok: string) =>
     items?.length ? items.filter((i) => i.status === ok).length / items.length : null;
   const tenders = sortRows(rows, sort, {

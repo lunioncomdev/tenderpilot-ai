@@ -58,6 +58,7 @@ model Organization {
   pieces           ApplicationPiece[]
   pieceFiles       ApplicationPieceFile[]
   pricings         Pricing[]
+  lots             TenderLot[]
   savedSearches    SavedSearch[]
   comments         Comment[]
   auditLogs        AuditLog[]
@@ -391,6 +392,7 @@ model Tender {
   proposals    Proposal[]
   pieces       ApplicationPiece[]
   pricings     Pricing[]
+  lots         TenderLot[]
   comments     Comment[]
 
   @@unique([organizationId, origin, externalId])
@@ -592,11 +594,14 @@ model Proposal {
   status                 ProposalStatus    @default(DRAFT)
   complianceGeneratingAt DateTime? // génération IA de la matrice en cours
   complianceError        String?
+  /// Lot concerné (null : consultation non allotie ou mémoire commun).
+  lotId                  String?
   createdById            String?
   createdAt              DateTime          @default(now())
   updatedAt              DateTime          @updatedAt
   organization           Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   tender                 Tender            @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  lot                    TenderLot?        @relation(fields: [lotId], references: [id], onDelete: SetNull)
   sections               ProposalSection[]
   compliance             ComplianceItem[]
 
@@ -679,6 +684,8 @@ model ApplicationPiece {
   organizationId String
   tenderId       String
   key            String // clé de la pièce usuelle (« dc1 », « memoire »…) ou « dce-<n> » / « custom-<id> »
+  /// Lot concerné (null : pièce commune à toute la candidature).
+  lotId          String?
   group          PieceGroup
   order          Int
   label          String
@@ -692,9 +699,11 @@ model ApplicationPiece {
   updatedAt      DateTime               @updatedAt
   organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   tender         Tender                 @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  lot            TenderLot?             @relation(fields: [lotId], references: [id], onDelete: Cascade)
   files          ApplicationPieceFile[]
 
-  @@unique([tenderId, key])
+  /// Index SQL en NULLS NOT DISTINCT : une seule pièce commune par clé.
+  @@unique([tenderId, key, lotId])
   @@index([organizationId, tenderId])
 }
 
@@ -758,12 +767,15 @@ model Pricing {
   adjustmentPercent Float          @default(0)
   /// Avertissements de l'analyse du modèle (feuilles ignorées, colonnes non reconnues…).
   warnings          String[]       @default([])
+  /// Lot auquel se rapporte le bordereau (deviné d'après le nom du fichier).
+  lotId             String?
   createdById       String?
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   tender            Tender         @relation(fields: [tenderId], references: [id], onDelete: Cascade)
   document          TenderDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  lot               TenderLot?     @relation(fields: [lotId], references: [id], onDelete: SetNull)
   lines             PricingLine[]
 
   @@unique([tenderId, documentId])
@@ -794,4 +806,25 @@ model PricingLine {
   pricing     Pricing @relation(fields: [pricingId], references: [id], onDelete: Cascade)
 
   @@unique([pricingId, sheet, row])
+}
+
+/// Lot d'une consultation allotie ; « selected » : le candidat y répond.
+model TenderLot {
+  id             String             @id @default(cuid())
+  organizationId String
+  tenderId       String
+  number         String // « 1 », « 2 », « A »…
+  title          String
+  order          Int                @default(0)
+  selected       Boolean            @default(false)
+  fromAnalysis   Boolean            @default(false)
+  createdAt      DateTime           @default(now())
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tender         Tender             @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  pieces         ApplicationPiece[]
+  proposals      Proposal[]
+  pricings       Pricing[]
+
+  @@unique([tenderId, number])
+  @@index([organizationId, tenderId])
 }

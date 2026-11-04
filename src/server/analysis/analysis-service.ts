@@ -8,6 +8,7 @@ import { ANALYZE_TENDER_PROMPT_VERSION, ANALYZE_TENDER_SYSTEM, analyzeTenderProm
 import { NotFoundError } from "../auth/rbac";
 import { logger } from "../logger";
 import { computePreScore } from "../scoring/prescore";
+import { syncLotsFromAnalysis } from "../applications/application-service";
 import { computeAndStoreScore } from "../scoring/score-service";
 import { verifyAllSources } from "./citations";
 import { buildDceContext } from "./context";
@@ -142,6 +143,7 @@ Passe ${i + 1}/${ANALYSIS_PARTS.length} : concentre-toi sur ${part.focus}. Ne re
       },
     });
     await enrichFromAnalysis(orgId, tender.id, res.data);
+    await syncLotsFromAnalysis(orgId, tender.id, value as unknown as TenderAnalysisResult);
     await computeAndStoreScore(orgId, tender.id, done.id);
     if (tender.status === "DETECTED" || tender.status === "TO_ANALYZE") {
       await prisma.tender.update({ where: { id: tender.id }, data: { status: "QUALIFIED" } });

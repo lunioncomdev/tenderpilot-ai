@@ -11,7 +11,7 @@ import { Badge, Input, Select } from "@/components/ui/primitives";
 import { fr } from "@/i18n/fr";
 import { cn, formatDate } from "@/lib/utils";
 import type { PieceDocAlert, PieceDocs } from "@/server/company/documents";
-import { addPieceAction, deletePieceAction, deletePieceFileAction, updatePieceAction } from "./actions";
+import { addPieceAction, createProposalAction, deletePieceAction, deletePieceFileAction, updatePieceAction } from "./actions";
 
 export type PieceView = {
   id: string;
@@ -23,6 +23,7 @@ export type PieceView = {
   fromDce: boolean;
   status: PieceStatus;
   note: string;
+  lotId: string | null;
   files: Array<{ id: string; filename: string; sizeBytes: number }>;
   profile: PieceDocs | null;
 };
@@ -39,23 +40,42 @@ const DOC_ALERT: Record<Exclude<PieceDocAlert, null | "missing">, { tone: "dange
 const ICON = { TODO: Circle, IN_PROGRESS: CircleDashed, DONE: CheckCircle2, NOT_APPLICABLE: CircleSlash } as const;
 const ICON_TONE = { TODO: "text-muted-foreground", IN_PROGRESS: "text-primary", DONE: "text-success", NOT_APPLICABLE: "text-muted-foreground/60" } as const;
 
-export function ApplicationPieces({ tenderId, pieces, canEdit, proposalId, maxMb }: { tenderId: string; pieces: PieceView[]; canEdit: boolean; proposalId?: string; maxMb: number }) {
+export type PieceSection = { key: string; title: string; group: PieceGroup; lotId: string | null; proposalId?: string };
+
+export function ApplicationPieces({ tenderId, pieces, sections, canEdit, canCreateProposal, maxMb }: {
+  tenderId: string;
+  pieces: PieceView[];
+  sections: PieceSection[];
+  canEdit: boolean;
+  canCreateProposal: boolean;
+  maxMb: number;
+}) {
   return (
     <div className="flex flex-col gap-5">
-      {(["CANDIDATURE", "OFFRE"] as const).map((group) => {
-        const items = pieces.filter((p) => p.group === group);
+      {sections.map((section) => {
+        const items = pieces.filter((p) => p.group === section.group && p.lotId === section.lotId);
         return (
-          <section key={group}>
-            <h4 className="mb-2 text-sm font-semibold">{fr.pieceGroup[group]}</h4>
+          <section key={section.key}>
+            <h4 className="mb-2 text-sm font-semibold">{section.title}</h4>
             {items.length > 0 && (
               <ul className="divide-y rounded-lg border">
-                {items.map((p) => <PieceRow key={p.id} piece={p} tenderId={tenderId} canEdit={canEdit} maxMb={maxMb} proposalId={p.key === "memoire" ? proposalId : undefined} />)}
+                {items.map((p) => (
+                  <PieceRow
+                    key={p.id}
+                    piece={p}
+                    tenderId={tenderId}
+                    canEdit={canEdit}
+                    maxMb={maxMb}
+                    memoire={p.key === "memoire" ? { proposalId: section.proposalId, canCreate: canCreateProposal, lotId: section.lotId } : undefined}
+                  />
+                ))}
               </ul>
             )}
             {canEdit && (
               <ActionForm action={addPieceAction} resetOnSuccess className="mt-2 flex items-center gap-2">
                 <input type="hidden" name="tenderId" value={tenderId} />
-                <input type="hidden" name="group" value={group} />
+                <input type="hidden" name="group" value={section.group} />
+                {section.lotId && <input type="hidden" name="lotId" value={section.lotId} />}
                 <Input name="label" placeholder="Ajouter une pièce…" className="h-8 text-sm" maxLength={250} required />
                 <SubmitButton size="sm" variant="ghost" aria-label="Ajouter la pièce"><Plus /></SubmitButton>
               </ActionForm>
@@ -67,7 +87,13 @@ export function ApplicationPieces({ tenderId, pieces, canEdit, proposalId, maxMb
   );
 }
 
-function PieceRow({ piece: p, tenderId, canEdit, maxMb, proposalId }: { piece: PieceView; tenderId: string; canEdit: boolean; maxMb: number; proposalId?: string }) {
+function PieceRow({ piece: p, tenderId, canEdit, maxMb, memoire }: {
+  piece: PieceView;
+  tenderId: string;
+  canEdit: boolean;
+  maxMb: number;
+  memoire?: { proposalId?: string; canCreate: boolean; lotId: string | null };
+}) {
   // Appel direct de l'action, sans <form> : React 19 réinitialise les champs d'un
   // formulaire après une Server Action, ce qui réaffichait l'ancien statut.
   const [status, setStatus] = useState(p.status);
@@ -107,7 +133,14 @@ function PieceRow({ piece: p, tenderId, canEdit, maxMb, proposalId }: { piece: P
           {p.detail && p.detail !== p.label && <p className="mt-0.5 text-xs text-muted-foreground">{p.detail}</p>}
           {p.source && <p className="mt-0.5 text-xs text-muted-foreground">Source : {p.source}</p>}
           {p.profile && status !== "NOT_APPLICABLE" && <ProfileDocs profile={p.profile} />}
-          {proposalId && <Link href={`/proposals/${proposalId}`} className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"><FileText className="size-3" /> Ouvrir le mémoire technique</Link>}
+          {memoire?.proposalId && <Link href={`/proposals/${memoire.proposalId}`} className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"><FileText className="size-3" /> Ouvrir le mémoire technique</Link>}
+          {memoire && !memoire.proposalId && memoire.canCreate && status !== "NOT_APPLICABLE" && (
+            <ActionForm action={createProposalAction} className="mt-1">
+              <input type="hidden" name="tenderId" value={tenderId} />
+              {memoire.lotId && <input type="hidden" name="lotId" value={memoire.lotId} />}
+              <button type="submit" className="inline-flex items-center gap-1 text-xs text-primary hover:underline"><FileText className="size-3" /> Préparer le mémoire technique</button>
+            </ActionForm>
+          )}
           {GENERATED_FORMS[p.key] && status !== "NOT_APPLICABLE" && (
             <a href={`/api/v1/tenders/${tenderId}/forms/${p.key}`} download className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline">
               <Download className="size-3" /> Télécharger le {GENERATED_FORMS[p.key]} pré-rempli (DOCX)

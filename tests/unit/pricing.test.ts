@@ -129,9 +129,9 @@ describe("analyse d'un bordereau", () => {
 describe("chiffrage dans le dossier", () => {
   it("joint le bordereau rempli à l'offre financière et signale les lignes non chiffrées", () => {
     const plan = planDossier({
-      pieces: [{ key: "prix", group: "OFFRE", label: "Offre financière (BPU / DPGF / DQE)", detail: "", status: "IN_PROGRESS", files: [] }],
-      companyDocs: [], deadline: null, hasProposal: false,
-      pricings: [{ id: "p1", filename: "DPGF lot 1.xlsx", priced: 10, missing: 2 }, { id: "p2", filename: "vide.xlsx", priced: 0, missing: 5 }],
+      pieces: [{ key: "prix", group: "OFFRE", label: "Offre financière (BPU / DPGF / DQE)", detail: "", status: "IN_PROGRESS", lotId: null, files: [] }],
+      companyDocs: [], deadline: null, proposals: [],
+      pricings: [{ id: "p1", filename: "DPGF lot 1.xlsx", lotId: null, priced: 10, missing: 2 }, { id: "p2", filename: "vide.xlsx", lotId: null, priced: 0, missing: 5 }],
     });
     expect(plan.entries).toEqual([{ path: "02_Offre/01_Offre_financiere_BPU_DPGF_DQE.xlsx", source: { kind: "pricing", pricingId: "p1" } }]);
     expect(plan.summary[0].issues).toContain("DPGF lot 1.xlsx : 2 ligne(s) non chiffrée(s)");

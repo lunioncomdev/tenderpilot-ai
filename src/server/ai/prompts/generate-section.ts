@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import { SourceRef } from "../../analysis/schema";
 import { SAFETY_RULES } from "./common";
 
-export const GENERATE_SECTION_PROMPT_VERSION = "generate-section@2026-10-27.1";
+export const GENERATE_SECTION_PROMPT_VERSION = "generate-section@2026-11-07.1";
 
 export const SectionOutputSchema = z.object({
   content: z.string().describe("Contenu de la section en Markdown (titres ###, listes, tableaux simples). Sans le titre principal."),
@@ -38,6 +38,8 @@ export function generateSectionPrompt(p: {
   references: string;
   previousContent?: string;
   instruction?: string;
+  /** Lot auquel répond le mémoire (consultation allotie). */
+  lot?: string;
 }): string {
   return `
 <analyse>
@@ -57,7 +59,8 @@ Références (identifiants REF-n) :
 ${p.references || "Aucune référence enregistrée."}
 </entreprise>
 
-Rédige la section « ${p.sectionTitle} » du mémoire technique.
+Rédige la section « ${p.sectionTitle} » du mémoire technique.${p.lot ? `
+Ce mémoire répond uniquement au ${p.lot} : ne traite que les besoins, exigences et livrables de ce lot, sans aborder les autres lots.` : ""}
 Consignes pour cette section : ${p.guidance}
 ${p.previousContent ? `\nVersion actuelle (à améliorer) :\n<version_actuelle>\n${p.previousContent}\n</version_actuelle>\n` : ""}${p.instruction ? `\nDemande de l'utilisateur : ${p.instruction}\n` : ""}
 Longueur visée : 250 à 700 mots selon l'importance de la section au regard des critères.`.trim();

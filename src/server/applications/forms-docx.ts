@@ -17,7 +17,8 @@ export type FormContext = {
   buyer: string;
   consultationObject: string;
   consultationReference: string;
-  lots: Array<{ number: string; title: string }>;
+  /** Lots de la consultation ; « selected » : lots auxquels le candidat répond. */
+  lots: Array<{ number: string; title: string; selected: boolean }>;
   company: {
     legalName: string;
     siret: string;
@@ -99,12 +100,15 @@ function signatureBlock(ctx: FormContext, letter: string): FormBlock {
 }
 
 export function dc1Content(ctx: FormContext): FormContent {
+  const anySelected = ctx.lots.some((l) => l.selected);
+  const allSelected = ctx.lots.length > 0 && ctx.lots.every((l) => l.selected);
+  const box = (b: boolean) => (b ? CHECKED : UNCHECKED);
   const lots = ctx.lots.length
     ? [
         line(`${UNCHECKED} Le marché public (pas d'allotissement)`),
-        line(`${UNCHECKED} Tous les lots`),
-        ...ctx.lots.map((l) => line(`${UNCHECKED} Lot n° ${l.number} — ${l.title}`, { indent: true })),
-        line("Cocher le ou les lots pour lesquels la candidature est présentée."),
+        line(`${box(allSelected)} Tous les lots`),
+        ...ctx.lots.map((l) => line(`${box(l.selected)} Lot n° ${l.number}${l.title ? ` — ${l.title}` : ""}`, { indent: true })),
+        ...(anySelected ? [] : [line("Cocher le ou les lots pour lesquels la candidature est présentée.")]),
       ]
     : [line(`${CHECKED} Le marché public (pas d'allotissement identifié dans le DCE — à vérifier)`)];
 

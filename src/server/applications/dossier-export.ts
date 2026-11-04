@@ -9,6 +9,7 @@ import { storage } from "../documents/storage";
 import { exportFilledTemplate, loadPricing } from "../pricing/pricing-service";
 import { exportProposalDocx } from "../proposals/proposal-export";
 import { countTodos, formContent, renderFormDocx, type FormContext, type FormKind } from "./forms-docx";
+import { compareLotNumbers, lotLabel, visiblePieces } from "./lots";
 
 // ── Plan du dossier (pur, testé unitairement) ──────────────────────────────
 
@@ -18,6 +19,8 @@ export type DossierPiece = {
   label: string;
   detail: string;
   status: PieceStatus;
+  /** Lot de la pièce (null : commune). */
+  lotId: string | null;
   files: Array<{ filename: string; storageKey: string }>;
 };
 
@@ -25,16 +28,23 @@ export type DossierCompanyDoc = { id: string; type: CompanyDocType; label: strin
 
 export type DossierSource =
   | { kind: "storage"; storageKey: string }
-  | { kind: "generated"; what: FormKind | "memoire" }
+  | { kind: "generated"; what: FormKind }
+  | { kind: "memoire"; proposalId: string }
   | { kind: "pricing"; pricingId: string };
 
 /** Bordereau de prix chiffré dans l'application. */
-export type DossierPricing = { id: string; filename: string; priced: number; missing: number };
+export type DossierPricing = { id: string; filename: string; lotId: string | null; priced: number; missing: number };
+
+/** Lot retenu (ordre des dossiers « Lot_… » dans le ZIP). */
+export type DossierLot = { id: string; number: string; title: string };
 
 export type DossierEntry = { path: string; source: DossierSource };
 
 export type DossierSummaryItem = {
   group: PieceGroup;
+  /** Dossier du ZIP : « 01_Candidature », « 02_Offre » ou « 02_Offre/Lot_2_TMA ». */
+  folder: string;
+  lotId: string | null;
   number: string;
   label: string;
   status: PieceStatus;
@@ -77,25 +87,47 @@ function baseOf(filename: string): string {
  * Compose le dossier à déposer, pièce par pièce, dans l'ordre de la liste :
  * 1. les fichiers joints à la pièce pour cette consultation ;
  * 2. à défaut, les pièces du profil encore valables à la date limite ;
- * 3. à défaut, un document généré (DC1, DC2, mémoire technique).
+ * 3. à défaut, un document généré (DC1, DC2, mémoire technique, bordereau chiffré).
  * Les pièces « Non requise » sont ignorées ; tout manque est signalé dans le sommaire.
+ * Les pièces d'un lot vont dans « 02_Offre/Lot_<n>_<intitulé> ». Les pièces passées
+ * sont celles à fournir (voir `visiblePieces`).
  */
 export function planDossier(input: {
   pieces: DossierPiece[];
   companyDocs: DossierCompanyDoc[];
   deadline: Date | null;
-  hasProposal: boolean;
+  /** Mémoires techniques existants, par lot (lotId null : commun). */
+  proposals: Array<{ id: string; lotId: string | null }>;
   pricings?: DossierPricing[];
+  lots?: DossierLot[];
   now?: Date;
 }): DossierPlan {
   const entries: DossierEntry[] = [];
   const summary: DossierSummaryItem[] = [];
-  const counters: Record<PieceGroup, number> = { CANDIDATURE: 0, OFFRE: 0 };
-  const ordered = [...input.pieces.filter((p) => p.group === "CANDIDATURE"), ...input.pieces.filter((p) => p.group === "OFFRE")];
+  const counters = new Map<string, number>();
+  const lots = input.lots ?? [];
+  const lotIds = new Set(lots.map((l) => l.id));
+  const folderOf = (p: DossierPiece) => {
+    const lot = p.lotId ? lots.find((l) => l.id === p.lotId) : undefined;
+    return lot ? `${GROUP_FOLDER.OFFRE}/${safeName(`Lot_${lot.number}${lot.title ? `_${lot.title}` : ""}`, 50)}` : GROUP_FOLDER[p.group];
+  };
+  const rank = (p: DossierPiece) => (p.group === "CANDIDATURE" ? -1 : p.lotId ? lots.findIndex((l) => l.id === p.lotId) : -0.5);
+  const ordered = input.pieces.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || a.i - b.i).map((x) => x.p);
+  const pricingsFor = (lotId: string | null) => {
+    const all = (input.pricings ?? []).filter((p) => p.priced > 0);
+    if (!lots.length) return { included: all, orphans: [] };
+    const orphans = all.filter((p) => !p.lotId || !lotIds.has(p.lotId));
+    // Un seul lot retenu : les bordereaux non rattachés lui reviennent.
+    if (lots.length === 1) return { included: all, orphans: [] };
+    return { included: all.filter((p) => p.lotId === lotId), orphans };
+  };
 
   for (const piece of ordered) {
     if (piece.status === "NOT_APPLICABLE") continue;
-    const number = String(++counters[piece.group]).padStart(2, "0");
+    const folder = folderOf(piece);
+    const n = (counters.get(folder) ?? 0) + 1;
+    counters.set(folder, n);
+    const number = String(n).padStart(2, "0");
     const stem = `${number}_${safeName(piece.label)}`;
     const issues: string[] = [];
     const sources: Array<{ name: string; ext: string; source: DossierSource }> = [];
@@ -115,27 +147,35 @@ export function planDossier(input: {
           sources.push({ name: doc.label || baseOf(doc.filename), ext: extOf(doc.filename), source: { kind: "storage", storageKey: doc.storageKey } });
         }
       }
-      const generated: FormKind | "memoire" | null =
-        piece.key === "dc1" ? "dc1" : piece.key === "dc2" && !sources.length ? "dc2" : piece.key === "memoire" && input.hasProposal ? "memoire" : null;
-      if (generated) {
-        sources.push({ name: generated === "memoire" ? "Memoire_technique" : `${generated.toUpperCase()}_pre-rempli`, ext: ".docx", source: { kind: "generated", what: generated } });
-        issues.push(generated === "memoire" ? "généré depuis l'application : vérifier la mise en page" : "généré pré-rempli : compléter, vérifier et signer");
+      const form: FormKind | null = piece.key === "dc1" ? "dc1" : piece.key === "dc2" && !sources.length ? "dc2" : null;
+      if (form) {
+        sources.push({ name: `${form.toUpperCase()}_pre-rempli`, ext: ".docx", source: { kind: "generated", what: form } });
+        issues.push("généré pré-rempli : compléter, vérifier et signer");
       }
-      if (linked && !(piece.key === "dc2" && generated)) {
+      if (linked && !form) {
         for (const m of linked.missing) issues.push(`absente du profil : ${m}`);
       }
-      if (piece.key === "memoire" && !input.hasProposal) issues.push("mémoire technique non créé");
+      if (piece.key === "memoire") {
+        const proposal = input.proposals.find((p) => p.lotId === piece.lotId);
+        if (proposal) {
+          sources.push({ name: "Memoire_technique", ext: ".docx", source: { kind: "memoire", proposalId: proposal.id } });
+          issues.push("généré depuis l'application : vérifier la mise en page");
+        } else {
+          issues.push(piece.lotId ? "mémoire technique du lot non créé" : "mémoire technique non créé");
+        }
+      }
       if (piece.key === "prix") {
-        for (const pr of (input.pricings ?? []).filter((p) => p.priced > 0)) {
+        const { included, orphans } = pricingsFor(piece.lotId);
+        for (const pr of included) {
           sources.push({ name: `${baseOf(pr.filename)}_complete`, ext: ".xlsx", source: { kind: "pricing", pricingId: pr.id } });
           issues.push(pr.missing ? `${pr.filename} : ${pr.missing} ligne(s) non chiffrée(s)` : `${pr.filename} : rempli depuis le chiffrage, vérifier les totaux`);
         }
+        for (const pr of orphans) issues.push(`${pr.filename} : bordereau non rattaché à un lot retenu — non inclus`);
       }
       if (!sources.length && !issues.length) issues.push("aucun fichier joint");
     }
     if (piece.status !== "DONE") issues.push(`statut « ${piece.status === "TODO" ? "À faire" : "En cours"} »`);
 
-    const folder = GROUP_FOLDER[piece.group];
     const files: string[] = [];
     if (sources.length === 1) {
       files.push(`${folder}/${stem}${sources[0].ext}`);
@@ -149,7 +189,7 @@ export function planDossier(input: {
       }
     }
     sources.forEach((s, i) => entries.push({ path: files[i], source: s.source }));
-    summary.push({ group: piece.group, number, label: piece.label, status: piece.status, files, issues });
+    summary.push({ group: piece.group, folder, lotId: piece.lotId, number, label: piece.label, status: piece.status, files, issues });
   }
   return { entries, summary };
 }
@@ -163,6 +203,7 @@ export function dossierSummaryText(input: {
   companyName: string;
   generatedAt: Date;
   summary: DossierSummaryItem[];
+  lots?: DossierLot[];
 }): string {
   const out: string[] = [
     "DOSSIER DE RÉPONSE",
@@ -174,14 +215,17 @@ export function dossierSummaryText(input: {
     `Date limite  : ${input.deadline ? formatDate(input.deadline) : "non précisée"}`,
     `Candidat     : ${input.companyName}`,
     `Généré le    : ${formatDate(input.generatedAt)}`,
+    ...(input.lots?.length ? [`Lots retenus : ${input.lots.map((l) => lotLabel(l)).join(" ; ")}`] : []),
     "",
   ];
   const toCheck = input.summary.filter((s) => s.issues.length).length;
   out.push(toCheck ? `⚠ ${toCheck} pièce(s) à vérifier avant le dépôt (voir ci-dessous).` : "Toutes les pièces sont prêtes.", "");
-  for (const group of ["CANDIDATURE", "OFFRE"] as const) {
-    const items = input.summary.filter((s) => s.group === group);
-    if (!items.length) continue;
-    out.push(group === "CANDIDATURE" ? "DOSSIER DE CANDIDATURE (01_Candidature)" : "OFFRE (02_Offre)", "");
+  const folders = [...new Set(input.summary.map((s) => s.folder))];
+  for (const folder of folders) {
+    const items = input.summary.filter((s) => s.folder === folder);
+    const lot = items[0].lotId ? input.lots?.find((l) => l.id === items[0].lotId) : undefined;
+    const title = items[0].group === "CANDIDATURE" ? "DOSSIER DE CANDIDATURE" : lot ? `OFFRE — ${lotLabel(lot).toUpperCase()}` : input.lots?.length ? "OFFRE — PIÈCES COMMUNES" : "OFFRE";
+    out.push(`${title} (${folder})`, "");
     for (const s of items) {
       out.push(`${s.number}. ${s.label}`);
       for (const f of s.files) out.push(`    ✓ ${f}`);
@@ -209,7 +253,7 @@ async function latestAnalysis(orgId: string, tenderId: string): Promise<TenderAn
 export async function loadFormContext(orgId: string, tenderId: string, fallbackCompanyName: string): Promise<FormContext> {
   const tender = await prisma.tender.findFirst({ where: { id: tenderId, organizationId: orgId } });
   if (!tender) throw new NotFoundError("Appel d'offres introuvable");
-  const [analysis, profile, refs] = await Promise.all([
+  const [analysis, profile, refs, lotRows] = await Promise.all([
     latestAnalysis(orgId, tenderId),
     prisma.companyProfile.findUnique({ where: { organizationId: orgId } }),
     prisma.companyReference.findMany({
@@ -217,12 +261,16 @@ export async function loadFormContext(orgId: string, tenderId: string, fallbackC
       orderBy: [{ year: "desc" }, { createdAt: "desc" }],
       take: 10,
     }),
+    prisma.tenderLot.findMany({ where: { tenderId, organizationId: orgId }, select: { number: true, title: true, selected: true } }),
   ]);
+  const lots = lotRows.length
+    ? lotRows.sort((a, b) => compareLotNumbers(a.number, b.number))
+    : (analysis?.lots ?? []).map((l) => ({ number: l.number, title: l.title, selected: false }));
   return {
     buyer: analysis?.buyer?.value || tender.buyerName,
     consultationObject: analysis?.object?.value || tender.title,
     consultationReference: analysis?.consultationReference?.value || tender.publicationRef || "",
-    lots: (analysis?.lots ?? []).map((l) => ({ number: l.number, title: l.title })),
+    lots,
     company: {
       legalName: profile?.legalName || fallbackCompanyName,
       siret: profile?.siren ?? "",
@@ -262,7 +310,8 @@ export async function buildDossierZip(orgId: string, tenderId: string, fallbackC
     where: { id: tenderId, organizationId: orgId },
     include: {
       pieces: { orderBy: [{ order: "asc" }, { createdAt: "asc" }], include: { files: { orderBy: { createdAt: "asc" } } } },
-      proposals: { select: { id: true }, orderBy: { createdAt: "asc" }, take: 1 },
+      proposals: { select: { id: true, lotId: true }, orderBy: { createdAt: "asc" } },
+      lots: { where: { selected: true }, select: { id: true, number: true, title: true } },
     },
   });
   if (!tender) throw new NotFoundError("Appel d'offres introuvable");
@@ -272,14 +321,20 @@ export async function buildDossierZip(orgId: string, tenderId: string, fallbackC
     select: { id: true, type: true, label: true, filename: true, storageKey: true, validUntil: true },
     orderBy: { createdAt: "asc" },
   });
-  const pricingRows = await prisma.pricing.findMany({ where: { tenderId, organizationId: orgId }, select: { id: true, document: { select: { filename: true } } }, orderBy: { createdAt: "asc" } });
+  const pricingRows = await prisma.pricing.findMany({
+    where: { tenderId, organizationId: orgId },
+    select: { id: true, lotId: true, document: { select: { filename: true } } },
+    orderBy: { createdAt: "asc" },
+  });
   const pricings: DossierPricing[] = await Promise.all(
     pricingRows.map(async (p) => {
       const { totals } = await loadPricing(orgId, p.id);
-      return { id: p.id, filename: p.document.filename, priced: totals.priced, missing: totals.lines - totals.priced };
+      return { id: p.id, filename: p.document.filename, lotId: p.lotId, priced: totals.priced, missing: totals.lines - totals.priced };
     }),
   );
-  const plan = planDossier({ pieces: tender.pieces, companyDocs, deadline: tender.deadlineAt, hasProposal: tender.proposals.length > 0, pricings });
+  const lots = tender.lots.sort((a, b) => compareLotNumbers(a.number, b.number));
+  const pieces = visiblePieces(tender.pieces, lots.map((l) => l.id));
+  const plan = planDossier({ pieces, companyDocs, deadline: tender.deadlineAt, proposals: tender.proposals, pricings, lots });
 
   const ctx = await loadFormContext(orgId, tenderId, fallbackCompanyName);
   const zip = new JSZip();
@@ -287,7 +342,7 @@ export async function buildDossierZip(orgId: string, tenderId: string, fallbackC
     let data: Buffer;
     if (e.source.kind === "storage") data = await storage().get(e.source.storageKey);
     else if (e.source.kind === "pricing") data = (await exportFilledTemplate(orgId, e.source.pricingId)).buf;
-    else if (e.source.what === "memoire") data = (await exportProposalDocx(orgId, tender.proposals[0].id, fallbackCompanyName))!.buf;
+    else if (e.source.kind === "memoire") data = (await exportProposalDocx(orgId, e.source.proposalId, fallbackCompanyName))!.buf;
     else data = await renderFormDocx(formContent(e.source.what, ctx), ctx.company.legalName);
     zip.file(e.path, data);
   }
@@ -301,6 +356,7 @@ export async function buildDossierZip(orgId: string, tenderId: string, fallbackC
       companyName: ctx.company.legalName,
       generatedAt: new Date(),
       summary: plan.summary,
+      lots,
     }),
   );
   const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
