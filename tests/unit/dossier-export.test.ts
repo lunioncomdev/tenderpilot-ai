@@ -93,6 +93,25 @@ describe("plan du dossier", () => {
     expect(plan.summary[1].issues).toContain("statut « En cours »");
   });
 
+  it("utilise les fichiers joints à la place des documents générés (mémoire, DC1, bordereau)", () => {
+    const file = (name: string) => ({ filename: name, storageKey: `k/${name}` });
+    const plan = planDossier({
+      pieces: [
+        piece("dc1", "CANDIDATURE", "DC1", { files: [file("DC1_signe.pdf")] }),
+        piece("memoire", "OFFRE", "Mémoire technique", { files: [file("Memoire.docx")] }),
+        piece("prix", "OFFRE", "BPU", { files: [file("BPU.xlsx")] }),
+      ],
+      companyDocs: [], deadline, proposals: [{ id: "m1", lotId: null }],
+      pricings: [{ id: "p1", filename: "BPU.xlsx", lotId: null, priced: 3, missing: 0 }], now,
+    });
+    expect(plan.entries.map((e) => e.source)).toEqual([
+      { kind: "storage", storageKey: "k/DC1_signe.pdf" },
+      { kind: "storage", storageKey: "k/Memoire.docx" },
+      { kind: "storage", storageKey: "k/BPU.xlsx" },
+    ]);
+    expect(plan.summary.flatMap((s) => s.issues)).toEqual([]);
+  });
+
   it("signale les pièces sans fichier et le mémoire non créé", () => {
     const plan = planDossier({
       pieces: [piece("prix", "OFFRE", "BPU", { status: "TODO" }), piece("memoire", "OFFRE", "Mémoire technique", { status: "TODO" })],

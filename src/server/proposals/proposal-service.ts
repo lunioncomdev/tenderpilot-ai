@@ -11,6 +11,7 @@ import {
   GENERATE_SECTION_SYSTEM,
   generateSectionPrompt,
   SectionOutputSchema,
+  stripSourceMarkers,
 } from "../ai/prompts/generate-section";
 import { NotFoundError } from "../auth/rbac";
 import { verifyAllSources } from "../analysis/citations";
@@ -172,12 +173,13 @@ export async function generateSection(orgId: string, sectionId: string, instruct
     );
 
     const { value } = verifyAllSources(res.data, ctx.refs);
+    const content = stripSourceMarkers(value.content);
     const version = section.version + 1;
     await prisma.$transaction([
       prisma.proposalSection.update({
         where: { id: section.id },
         data: {
-          content: value.content,
+          content,
           status: "AI_DRAFT",
           version,
           toValidate: value.claimsToValidate,
@@ -185,7 +187,7 @@ export async function generateSection(orgId: string, sectionId: string, instruct
         },
       }),
       prisma.proposalSectionVersion.create({
-        data: { sectionId: section.id, version, content: value.content, author: `ai:${res.model}` },
+        data: { sectionId: section.id, version, content, author: `ai:${res.model}` },
       }),
     ]);
   } catch (err) {

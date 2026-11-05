@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import { SourceRef } from "../../analysis/schema";
 import { SAFETY_RULES } from "./common";
 
-export const GENERATE_SECTION_PROMPT_VERSION = "generate-section@2026-11-07.1";
+export const GENERATE_SECTION_PROMPT_VERSION = "generate-section@2026-11-07.2";
 
 export const SectionOutputSchema = z.object({
   content: z.string().describe("Contenu de la section en Markdown (titres ###, listes, tableaux simples). Sans le titre principal."),
@@ -26,7 +26,17 @@ RÈGLES SPÉCIFIQUES AU MÉMOIRE (impératives) :
 - Toute proposition d'engagement ou de moyen qui ne figure pas dans les données entreprise (ex. délai d'intervention, outil, mesure) doit être suivie de « [À VALIDER] » et listée dans "claimsToValidate".
 - Ne mentionne aucun prix (l'offre financière est traitée à part).
 - Reprends le vocabulaire de l'acheteur ; reste factuel, sans superlatifs creux.
+- Le champ "content" est le texte remis à l'acheteur : il ne doit contenir AUCUN identifiant de source (REF-n, PROFIL.xxx, D2-C14…), ni entre crochets ni ailleurs. Les sources vont uniquement dans "companyFactsUsed" et "dceSources". Une référence client se cite par son titre et son client, jamais par « REF-n ». Seuls les marqueurs « [À COMPLÉTER : …] » et « [À VALIDER] » sont autorisés dans le texte.
 `.trim();
+
+const SOURCE_ID = String.raw`(?:REF-\d+|PROFIL\.\w+|D\d+-C\d+)`;
+/** Marqueur ne contenant que des identifiants de source : [REF-1], [PROFIL.description ; REF-2], (D2-C14)… */
+const SOURCE_MARKER = new RegExp(String.raw`[ \t]*[\[(]\s*${SOURCE_ID}(?:\s*[,;/]?\s*${SOURCE_ID})*\s*[\])]`, "g");
+
+/** Retire du texte rédigé les identifiants de source internes que l'IA aurait recopiés malgré la consigne. */
+export function stripSourceMarkers(content: string): string {
+  return content.replace(SOURCE_MARKER, "");
+}
 
 export function generateSectionPrompt(p: {
   sectionTitle: string;

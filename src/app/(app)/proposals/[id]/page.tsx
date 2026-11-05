@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CheckCircle2, Download, History, Sparkles } from "lucide-react";
+import { CheckCircle2, Download, History, Sparkles, Upload } from "lucide-react";
 import { AutoRefresh } from "@/components/client-utils";
 import { ActionForm, SubmitButton } from "@/components/form";
 import { Markdown } from "@/components/markdown";
@@ -14,7 +14,9 @@ import type { VerifiedSourceRef } from "@/server/analysis/schema";
 import { requireContext } from "@/server/auth/context";
 import { hasRole } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
+import { env } from "@/server/env";
 import { Sources } from "../../tenders/[id]/analysis-view";
+import { PieceFileUpload, PieceFiles } from "../../tenders/[id]/application-pieces";
 import {
   generateComplianceAction, generateEverythingAction, generateSectionAction, restoreVersionAction, saveComplianceAction, saveSectionAction,
   setProposalStatusAction, validateSectionAction,
@@ -46,6 +48,12 @@ export default async function ProposalPage({
     },
   });
   if (!proposal) notFound();
+  // Pièce « Mémoire technique » du dossier : un fichier joint y remplace le mémoire généré.
+  const memoirePiece = await prisma.applicationPiece.findFirst({
+    where: { organizationId: ctx.orgId, tenderId: proposal.tender.id, key: "memoire", lotId: proposal.lotId },
+    select: { id: true, label: true, files: { orderBy: { createdAt: "asc" }, select: { id: true, filename: true, sizeBytes: true } } },
+  });
+  const uploaded = memoirePiece?.files ?? [];
   const canEdit = hasRole(ctx.role, "MEMBER");
   const ai = await aiStatus(ctx.orgId);
   const sectionsGenerating = proposal.sections.filter((s) => s.status === "GENERATING").length;
@@ -69,7 +77,33 @@ export default async function ProposalPage({
           </>
         }
       />
-      {!ai.enabled && <Alert tone="warning" className="mb-4">IA indisponible : {ai.reason}. L&apos;édition manuelle reste possible.</Alert>}
+      {!ai.enabled && <Alert tone="warning" className="mb-4">IA indisponible : {ai.reason}. L&apos;édition manuelle reste possible, ou joignez votre propre mémoire.</Alert>}
+
+      {uploaded.length > 0 ? (
+        <Alert tone="success" className="mb-4">
+          <p className="font-medium">Mémoire fourni sous forme de fichier</p>
+          <p className="mt-1 text-sm">
+            Le dossier de candidature et le contrôle avant dépôt utilisent {uploaded.length > 1 ? "les fichiers joints" : "le fichier joint"} ci-dessous à la place du mémoire rédigé ici.
+            Retirez-{uploaded.length > 1 ? "les" : "le"} pour revenir au mémoire généré.
+          </p>
+          <PieceFiles files={uploaded} canEdit={canEdit} />
+          {canEdit && memoirePiece && <div className="mt-2"><PieceFileUpload pieceId={memoirePiece.id} label={memoirePiece.label} maxMb={env().UPLOAD_MAX_MB} text="Ajouter un fichier" variant="outline" /></div>}
+        </Alert>
+      ) : canEdit && (
+        <Card className="mb-4">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
+            <div>
+              <p className="flex items-center gap-2 font-semibold"><Upload className="size-4 text-primary" /> Utiliser votre propre mémoire</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {memoirePiece
+                  ? "Mémoire déjà rédigé ? Joignez-le (PDF ou DOCX) : il sera inclus dans le dossier à la place du mémoire généré par l'IA."
+                  : "Générez la liste des pièces du dossier depuis la fiche de l'appel d'offres pour pouvoir joindre votre propre mémoire."}
+              </p>
+            </div>
+            {memoirePiece && <div className="flex flex-wrap items-center gap-1"><PieceFileUpload pieceId={memoirePiece.id} label={memoirePiece.label} maxMb={env().UPLOAD_MAX_MB} text="Joindre mon mémoire" variant="outline" /></div>}
+          </CardContent>
+        </Card>
+      )}
 
       {canEdit && (
         <Card className="mb-6 border-primary/30 bg-accent/40">

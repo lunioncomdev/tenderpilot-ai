@@ -66,6 +66,15 @@ describe("contrôle avant dépôt", () => {
     });
   });
 
+  it("accepte un mémoire joint en fichier à la place du mémoire généré", () => {
+    const uploaded = [piece("ae", "Acte d'engagement"), piece("memoire", "Mémoire technique"), piece("prix", "Offre financière", { files: [] })];
+    const none = evaluateReadiness(base({ pieces: uploaded, proposals: [] }));
+    expect(check(none, "memoire")).toMatchObject({ level: "ok", summary: "Mémoire technique fourni sous forme de fichier.", details: [] });
+    const draft = evaluateReadiness(base({ pieces: uploaded, proposals: [{ id: "m", lotId: null, sections: [{ title: "Solution", status: "AI_DRAFT", markers: 2 }], compliance: [] }] }));
+    expect(check(draft, "memoire").level).toBe("ok");
+    expect(draft.ready).toBe(true);
+  });
+
   it("signale les exigences non conformes sans bloquer", () => {
     const r = evaluateReadiness(base({ proposals: [{ ...base().proposals[0], compliance: [{ status: "COMPLIANT" }, { status: "NON_COMPLIANT" }, { status: "TO_VERIFY" }] }] }));
     expect(check(r, "compliance")).toMatchObject({ level: "warning", summary: "1 / 3 exigence(s) conforme(s)." });
