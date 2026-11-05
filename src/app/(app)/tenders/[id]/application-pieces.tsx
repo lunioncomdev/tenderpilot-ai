@@ -30,6 +30,8 @@ export type PieceView = {
 
 /** Pièces pour lesquelles l'application génère un formulaire pré-rempli. */
 const GENERATED_FORMS: Record<string, string> = { dc1: "DC1", dc2: "DC2" };
+/** Pièces que l'application peut produire (IA ou modèle) ; un fichier joint prend leur place dans le dossier. */
+const GENERATED_LABEL: Record<string, string> = { dc1: "le DC1 pré-rempli", dc2: "le DC2 pré-rempli", memoire: "le mémoire généré dans l'application", prix: "le bordereau rempli depuis le chiffrage" };
 
 const DOC_ALERT: Record<Exclude<PieceDocAlert, null | "missing">, { tone: "danger" | "warning"; label: string }> = {
   expired: { tone: "danger", label: "Expirée — à mettre à jour" },
@@ -134,12 +136,17 @@ function PieceRow({ piece: p, tenderId, canEdit, maxMb, memoire }: {
           {p.source && <p className="mt-0.5 text-xs text-muted-foreground">Source : {p.source}</p>}
           {p.profile && status !== "NOT_APPLICABLE" && <ProfileDocs profile={p.profile} />}
           {memoire?.proposalId && <Link href={`/proposals/${memoire.proposalId}`} className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"><FileText className="size-3" /> Ouvrir le mémoire technique</Link>}
-          {memoire && !memoire.proposalId && memoire.canCreate && status !== "NOT_APPLICABLE" && (
-            <ActionForm action={createProposalAction} className="mt-1">
-              <input type="hidden" name="tenderId" value={tenderId} />
-              {memoire.lotId && <input type="hidden" name="lotId" value={memoire.lotId} />}
-              <button type="submit" className="inline-flex items-center gap-1 text-xs text-primary hover:underline"><FileText className="size-3" /> Préparer le mémoire technique</button>
-            </ActionForm>
+          {memoire && !memoire.proposalId && !p.files.length && status !== "NOT_APPLICABLE" && (
+            <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+              {memoire.canCreate && (
+                <ActionForm action={createProposalAction} className="inline-flex">
+                  <input type="hidden" name="tenderId" value={tenderId} />
+                  {memoire.lotId && <input type="hidden" name="lotId" value={memoire.lotId} />}
+                  <button type="submit" className="inline-flex items-center gap-1 text-primary hover:underline"><FileText className="size-3" /> Rédiger le mémoire avec l&apos;IA</button>
+                </ActionForm>
+              )}
+              {canEdit && <span>{memoire.canCreate ? "ou joignez votre propre mémoire (« Joindre »)." : "Joignez votre propre mémoire (« Joindre »), ou analysez le DCE pour le rédiger avec l'IA."}</span>}
+            </div>
           )}
           {GENERATED_FORMS[p.key] && status !== "NOT_APPLICABLE" && (
             <a href={`/api/v1/tenders/${tenderId}/forms/${p.key}`} download className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline">
@@ -147,6 +154,9 @@ function PieceRow({ piece: p, tenderId, canEdit, maxMb, memoire }: {
             </a>
           )}
           {p.files.length > 0 && <PieceFiles files={p.files} canEdit={canEdit} />}
+          {p.files.length > 0 && GENERATED_LABEL[p.key] && status !== "NOT_APPLICABLE" && (
+            <p className="mt-1 text-xs text-muted-foreground">Le dossier utilise {p.files.length > 1 ? "les fichiers joints" : "le fichier joint"} à la place de {GENERATED_LABEL[p.key]}.</p>
+          )}
         </div>
         {canEdit ? (
           <div className="flex max-w-full flex-wrap items-center justify-end gap-1">
@@ -218,7 +228,7 @@ function ProfileDocs({ profile }: { profile: PieceDocs }) {
   );
 }
 
-function PieceFiles({ files, canEdit }: { files: PieceView["files"]; canEdit: boolean }) {
+export function PieceFiles({ files, canEdit }: { files: PieceView["files"]; canEdit: boolean }) {
   return (
     <ul className="mt-1.5 flex flex-col gap-1 text-xs">
       {files.map((f) => (
@@ -244,7 +254,13 @@ function formatSize(bytes: number): string {
 }
 
 /** Joint un ou plusieurs fichiers propres à la consultation (AE signé, BPU rempli, CV…). */
-function PieceFileUpload({ pieceId, label, maxMb }: { pieceId: string; label: string; maxMb: number }) {
+export function PieceFileUpload({ pieceId, label, maxMb, text = "Joindre", variant = "ghost" }: {
+  pieceId: string;
+  label: string;
+  maxMb: number;
+  text?: string;
+  variant?: "ghost" | "outline";
+}) {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -282,8 +298,8 @@ function PieceFileUpload({ pieceId, label, maxMb }: { pieceId: string; label: st
         aria-hidden
         onChange={(e) => upload(e.currentTarget.files)}
       />
-      <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs" disabled={busy} onClick={() => input.current?.click()} aria-label={`Joindre un fichier : ${label}`} title="Joindre un fichier (PDF, DOCX, XLSX, JPG, PNG)">
-        {busy ? <Loader2 className="animate-spin" /> : <Upload />} Joindre
+      <Button type="button" variant={variant} size="sm" className="h-8 px-2 text-xs" disabled={busy} onClick={() => input.current?.click()} aria-label={`Joindre un fichier : ${label}`} title="Joindre un fichier (PDF, DOCX, XLSX, JPG, PNG)">
+        {busy ? <Loader2 className="animate-spin" /> : <Upload />} {text}
       </Button>
       {error && <span className="basis-full text-right text-xs text-danger" role="alert">{error}</span>}
     </>

@@ -248,6 +248,7 @@ export async function deletePieceFileAction(_p: ActionState, fd: FormData): Prom
     const id = Id.parse(fd.get("fileId"));
     const f = await deletePieceFile(ctx.orgId, id, ctx.userId);
     revalidatePath(`/tenders/${f.piece.tenderId}`);
+    if (f.piece.key === "memoire") revalidatePath("/proposals/[id]", "page");
     return { ok: true };
   });
 }

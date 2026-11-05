@@ -127,7 +127,13 @@ export function evaluateReadiness(input: ReadinessInput): Readiness {
     const blockers: string[] = [];
     let sections = 0;
     let validated = 0;
+    let uploaded = 0;
     for (const m of memoires) {
+      // Mémoire rédigé hors de l'application et joint en fichier : il remplace le mémoire généré.
+      if (m.files.length) {
+        uploaded++;
+        continue;
+      }
       const proposal = input.proposals.find((x) => x.lotId === m.lotId);
       const where = scope(input.lots, m.lotId);
       if (!proposal) {
@@ -146,7 +152,11 @@ export function evaluateReadiness(input: ReadinessInput): Readiness {
         key: "memoire",
         label: "Mémoire technique",
         level: blockers.length ? "blocker" : "ok",
-        summary: blockers.length ? `${validated} / ${sections} section(s) validée(s), ${plural(blockers.length, "point")} à traiter.` : `${plural(sections, "section")} validée(s), sans marqueur restant.`,
+        summary: blockers.length
+          ? `${validated} / ${sections} section(s) validée(s), ${plural(blockers.length, "point")} à traiter.`
+          : uploaded === memoires.length
+            ? "Mémoire technique fourni sous forme de fichier."
+            : `${plural(sections, "section")} validée(s), sans marqueur restant${uploaded ? ` ; ${plural(uploaded, "mémoire")} fourni(s) en fichier` : ""}.`,
         details: blockers,
       });
     }
