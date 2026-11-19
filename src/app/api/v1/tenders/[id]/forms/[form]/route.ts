@@ -13,8 +13,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id, form } = await params;
   if (form !== "dc1" && form !== "dc2") return jsonError(404, "Formulaire inconnu");
   try {
-    const { buf, filename, todos } = await buildFormDocx(ctx.orgId, id, form, ctx.orgName);
-    await audit({ orgId: ctx.orgId, userId: ctx.userId, action: "tender.form_exported", entityType: "Tender", entityId: id, metadata: { form, todos } });
+    const { buf, filename, todos, template, unplaced } = await buildFormDocx(ctx.orgId, id, form, ctx.orgName);
+    await audit({
+      orgId: ctx.orgId, userId: ctx.userId, action: "tender.form_exported", entityType: "Tender", entityId: id,
+      metadata: { form, todos, template: template ? `${template.source}:${template.filename}` : null, unplaced },
+    });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

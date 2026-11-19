@@ -13,6 +13,8 @@ export const COMPANY_DOC_TYPES: Record<CompanyDocType, { label: string; validity
   REFERENCES: { label: "Attestations de références", validityMonths: null },
   CERTIFICATION: { label: "Certificat / qualification", validityMonths: null },
   POUVOIR: { label: "Pouvoir du signataire", validityMonths: null },
+  MODELE_DC1: { label: "Modèle officiel DC1 (DOCX à remplir)", validityMonths: null },
+  MODELE_DC2: { label: "Modèle officiel DC2 (DOCX à remplir)", validityMonths: null },
   AUTRE: { label: "Autre pièce", validityMonths: null },
 };
 

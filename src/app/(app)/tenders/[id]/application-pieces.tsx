@@ -44,13 +44,17 @@ const ICON_TONE = { TODO: "text-muted-foreground", IN_PROGRESS: "text-primary", 
 
 export type PieceSection = { key: string; title: string; group: PieceGroup; lotId: string | null; proposalId?: string };
 
-export function ApplicationPieces({ tenderId, pieces, sections, canEdit, canCreateProposal, maxMb }: {
+/** Modèle officiel qui sera rempli pour un formulaire (DC1 / DC2) : joint au DCE ou déposé dans le profil. */
+export type FormTemplateView = { source: "dce" | "profil"; filename: string };
+
+export function ApplicationPieces({ tenderId, pieces, sections, canEdit, canCreateProposal, maxMb, formTemplates = {} }: {
   tenderId: string;
   pieces: PieceView[];
   sections: PieceSection[];
   canEdit: boolean;
   canCreateProposal: boolean;
   maxMb: number;
+  formTemplates?: Partial<Record<string, FormTemplateView | null>>;
 }) {
   return (
     <div className="flex flex-col gap-5">
@@ -69,6 +73,7 @@ export function ApplicationPieces({ tenderId, pieces, sections, canEdit, canCrea
                     canEdit={canEdit}
                     maxMb={maxMb}
                     memoire={p.key === "memoire" ? { proposalId: section.proposalId, canCreate: canCreateProposal, lotId: section.lotId } : undefined}
+                    template={formTemplates[p.key] ?? null}
                   />
                 ))}
               </ul>
@@ -89,12 +94,13 @@ export function ApplicationPieces({ tenderId, pieces, sections, canEdit, canCrea
   );
 }
 
-function PieceRow({ piece: p, tenderId, canEdit, maxMb, memoire }: {
+function PieceRow({ piece: p, tenderId, canEdit, maxMb, memoire, template }: {
   piece: PieceView;
   tenderId: string;
   canEdit: boolean;
   maxMb: number;
   memoire?: { proposalId?: string; canCreate: boolean; lotId: string | null };
+  template?: FormTemplateView | null;
 }) {
   // Appel direct de l'action, sans <form> : React 19 réinitialise les champs d'un
   // formulaire après une Server Action, ce qui réaffichait l'ancien statut.
@@ -149,9 +155,18 @@ function PieceRow({ piece: p, tenderId, canEdit, maxMb, memoire }: {
             </div>
           )}
           {GENERATED_FORMS[p.key] && status !== "NOT_APPLICABLE" && (
-            <a href={`/api/v1/tenders/${tenderId}/forms/${p.key}`} download className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline">
-              <Download className="size-3" /> Télécharger le {GENERATED_FORMS[p.key]} pré-rempli (DOCX)
-            </a>
+            <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+              <a href={`/api/v1/tenders/${tenderId}/forms/${p.key}`} download className="inline-flex items-center gap-1 text-primary hover:underline">
+                <Download className="size-3" /> Télécharger le {GENERATED_FORMS[p.key]} pré-rempli (DOCX)
+              </a>
+              {template ? (
+                <span title={template.filename}>— rempli sur le modèle officiel {template.source === "dce" ? "joint au DCE" : "du profil entreprise"}</span>
+              ) : (
+                <span>
+                  — trame de l&apos;application. Pour le formulaire officiel rempli, <Link href="/company#pieces" className="underline">déposez le modèle {GENERATED_FORMS[p.key]} (DOCX de la DAJ) dans le profil</Link>.
+                </span>
+              )}
+            </div>
           )}
           {p.files.length > 0 && <PieceFiles files={p.files} canEdit={canEdit} />}
           {p.files.length > 0 && GENERATED_LABEL[p.key] && status !== "NOT_APPLICABLE" && (

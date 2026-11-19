@@ -243,6 +243,8 @@ enum CompanyDocType {
   REFERENCES
   CERTIFICATION
   POUVOIR
+  MODELE_DC1 // modèle officiel DC1 (DOCX de la DAJ) à remplir
+  MODELE_DC2 // modèle officiel DC2 (DOCX de la DAJ) à remplir
   AUTRE
 }
 

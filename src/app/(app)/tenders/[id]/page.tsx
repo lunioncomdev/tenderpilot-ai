@@ -9,6 +9,7 @@ import { Alert, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle
 import { fr } from "@/i18n/fr";
 import { formatDate, formatDateTime, formatEur, NOT_SPECIFIED } from "@/lib/utils";
 import { aiStatus } from "@/server/ai/gateway";
+import { findFormTemplates } from "@/server/applications/dossier-export";
 import { compareLotNumbers, lotLabel, visiblePieces } from "@/server/applications/lots";
 import { loadReadiness } from "@/server/applications/readiness";
 import { APPLICATION_STATUSES, pieceProgress, PRE_APPLICATION_STATUSES } from "@/server/applications/pieces";
@@ -70,7 +71,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
     prisma.companyDocument.findMany({ where: { organizationId: ctx.orgId }, orderBy: { createdAt: "desc" }, select: { id: true, type: true, label: true, filename: true, validUntil: true } }),
     prisma.dceRetrievalSettings.findUnique({ where: { organizationId: ctx.orgId } }),
   ]);
-  const templates = await priceTemplates(ctx.orgId, tender.id);
+  const [templates, formTemplates] = await Promise.all([priceTemplates(ctx.orgId, tender.id), findFormTemplates(ctx.orgId, tender.id)]);
   const pricingRows = await prisma.pricing.findMany({ where: { tenderId: tender.id, organizationId: ctx.orgId }, select: { id: true, documentId: true, lotId: true } });
   const pricings = new Map(
     await Promise.all(pricingRows.map(async (p) => [p.documentId, { id: p.id, lotId: p.lotId, totals: (await loadPricing(ctx.orgId, p.id)).totals }] as const)),
@@ -194,7 +195,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
                       {docIssues.length} pièce(s) à compléter ou mettre à jour dans le <Link href="/company#pieces" className="underline">profil entreprise</Link> : {docIssues.map((p) => p.label).join(", ")}.
                     </Alert>
                   )}
-                  <ApplicationPieces tenderId={tender.id} canEdit={canEdit} canCreateProposal={canCreateProposal} sections={pieceSections} pieces={pieceViews} maxMb={env().UPLOAD_MAX_MB} />
+                  <ApplicationPieces tenderId={tender.id} canEdit={canEdit} canCreateProposal={canCreateProposal} sections={pieceSections} pieces={pieceViews} maxMb={env().UPLOAD_MAX_MB} formTemplates={{ dc1: formTemplates.dc1 && { source: formTemplates.dc1.source, filename: formTemplates.dc1.filename }, dc2: formTemplates.dc2 && { source: formTemplates.dc2.source, filename: formTemplates.dc2.filename } }} />
                 </CardContent>
               )}
             </Card>

@@ -40,6 +40,7 @@ Légende : `[x]` fait et testé · `[~]` fait, vérification incomplète · `[ ]
 - [x] Checklist documentaire par candidature (pièces usuelles + exigences du DCE, liées au profil)
 - [x] Fichiers joints aux pièces du dossier (AE signé, BPU rempli, CV…)
 - [x] DC1 / DC2 pré-remplis (DOCX, déterministe) ; identité légale du candidat dans le profil
+- [x] DC1 / DC2 remplis sur le modèle officiel (DOCX joint au DCE ou modèle DAJ déposé dans le profil) ; trame de l'application à défaut
 - [x] Export du dossier complet en ZIP (`01_Candidature/`, `02_Offre/`, sommaire des manques)
 - [x] Gestion des lots : lots repris de l'analyse ou saisis, sélection, pièces de l'offre / mémoire / bordereau par lot, ZIP par lot, DC1 coché
 - [x] Contrôle « prêt à déposer » : bloque `READY_TO_SUBMIT` / `SUBMITTED` (date limite, lots, pièces, validité des attestations, mémoire validé sans marqueur, bordereaux complets), dérogation motivée réservée aux administrateurs et auditée
