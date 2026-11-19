@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 
 const optDate = z.preprocess((v) => (v === "" || v === null || v === undefined ? null : v), z.iso.date().nullable());
 const Fields = z.object({
-  type: z.enum(["KBIS", "URSSAF", "FISCALE", "ASSURANCE_RC", "RIB", "DC2", "BILANS", "REFERENCES", "CERTIFICATION", "POUVOIR", "AUTRE"]),
+  type: z.enum(["KBIS", "URSSAF", "FISCALE", "ASSURANCE_RC", "RIB", "DC2", "BILANS", "REFERENCES", "CERTIFICATION", "POUVOIR", "MODELE_DC1", "MODELE_DC2", "AUTRE"]),
   label: z.string().trim().max(200).optional(),
   issuedAt: optDate,
   validUntil: optDate,

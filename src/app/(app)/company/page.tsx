@@ -182,6 +182,7 @@ export default async function CompanyPage() {
               <CardTitle>Pièces administratives ({docs.length})</CardTitle>
               <CardDescription>
                 Kbis, attestations, assurance, RIB… réutilisés dans chaque dossier de candidature. Alerte {EXPIRY_WARNING_DAYS} jours avant la fin de validité, ou si la pièce expire avant la date limite d&apos;un dossier.
+                Déposez aussi les modèles officiels DC1 et DC2 (fichiers Word de la DAJ, economie.gouv.fr) : l&apos;application les remplit avec le profil et les données de chaque consultation.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">

@@ -1,14 +1,16 @@
 import JSZip from "jszip";
 import type { CompanyDocType, PieceGroup, PieceStatus } from "@prisma/client";
-import { formatDate } from "@/lib/utils";
+import { formatDate, normalizeText } from "@/lib/utils";
 import type { TenderAnalysisResult } from "../analysis/schema";
 import { NotFoundError } from "../auth/rbac";
 import { linkCompanyDocs, type PieceDocAlert } from "../company/documents";
 import { prisma } from "../db";
 import { storage } from "../documents/storage";
+import { logger } from "../logger";
 import { exportFilledTemplate, loadPricing } from "../pricing/pricing-service";
 import { exportProposalDocx } from "../proposals/proposal-export";
-import { countTodos, formContent, renderFormDocx, type FormContext, type FormKind } from "./forms-docx";
+import { fillDocxForm } from "./docx-form-template";
+import { countTodos, formContent, officialFormOps, renderFormDocx, type FormContext, type FormKind } from "./forms-docx";
 import { compareLotNumbers, lotLabel, visiblePieces } from "./lots";
 
 // ── Plan du dossier (pur, testé unitairement) ──────────────────────────────
@@ -34,6 +36,10 @@ export type DossierSource =
 
 /** Bordereau de prix chiffré dans l'application. */
 export type DossierPricing = { id: string; filename: string; lotId: string | null; priced: number; missing: number };
+
+/** Origine du modèle officiel DC1 / DC2 : fichier joint au DCE par l'acheteur, ou modèle DAJ déposé dans le profil. */
+export type FormTemplateSource = "dce" | "profil";
+export type FormTemplate = { source: FormTemplateSource; filename: string; storageKey: string };
 
 /** Lot retenu (ordre des dossiers « Lot_… » dans le ZIP). */
 export type DossierLot = { id: string; number: string; title: string };
@@ -100,6 +106,8 @@ export function planDossier(input: {
   proposals: Array<{ id: string; lotId: string | null }>;
   pricings?: DossierPricing[];
   lots?: DossierLot[];
+  /** Formulaires pour lesquels un modèle officiel sera rempli (sinon : trame de l'application). */
+  formTemplates?: Partial<Record<FormKind, FormTemplateSource>>;
   now?: Date;
 }): DossierPlan {
   const entries: DossierEntry[] = [];
@@ -150,7 +158,8 @@ export function planDossier(input: {
       const form: FormKind | null = piece.key === "dc1" ? "dc1" : piece.key === "dc2" && !sources.length ? "dc2" : null;
       if (form) {
         sources.push({ name: `${form.toUpperCase()}_pre-rempli`, ext: ".docx", source: { kind: "generated", what: form } });
-        issues.push("généré pré-rempli : compléter, vérifier et signer");
+        const template = input.formTemplates?.[form];
+        issues.push(template ? `modèle officiel ${template === "dce" ? "du DCE" : "du profil"} rempli : vérifier, compléter et signer` : "généré pré-rempli : compléter, vérifier et signer");
       }
       if (linked && !form) {
         for (const m of linked.missing) issues.push(`absente du profil : ${m}`);
@@ -292,16 +301,80 @@ export async function loadFormContext(orgId: string, tenderId: string, fallbackC
   };
 }
 
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const TEMPLATE_FILENAME: Record<FormKind, RegExp> = { dc1: /(^| )dc ?1( |$)|lettre de candidature/, dc2: /(^| )dc ?2( |$)|declaration du candidat/ };
+const TEMPLATE_DOC_TYPE: Record<FormKind, CompanyDocType> = { dc1: "MODELE_DC1", dc2: "MODELE_DC2" };
+
+/**
+ * Modèle officiel à remplir pour chaque formulaire : d'abord la version Word jointe
+ * au DCE par l'acheteur (la plus récente), sinon le modèle DAJ déposé dans le profil
+ * entreprise. null : la trame de l'application sera utilisée.
+ */
+export async function findFormTemplates(orgId: string, tenderId: string): Promise<Record<FormKind, FormTemplate | null>> {
+  const [dceDocs, ownDocs] = await Promise.all([
+    prisma.tenderDocument.findMany({
+      where: { tenderId, organizationId: orgId, mimeType: DOCX_MIME },
+      select: { filename: true, storageKey: true },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.companyDocument.findMany({
+      where: { organizationId: orgId, type: { in: Object.values(TEMPLATE_DOC_TYPE) } },
+      select: { type: true, filename: true, storageKey: true },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+  const pick = (kind: FormKind): FormTemplate | null => {
+    const dce = dceDocs.find((d) => {
+      const n = normalizeText(d.filename);
+      return TEMPLATE_FILENAME[kind].test(n) && !n.includes("notice");
+    });
+    if (dce) return { source: "dce", filename: dce.filename, storageKey: dce.storageKey };
+    const own = ownDocs.find((d) => d.type === TEMPLATE_DOC_TYPE[kind]);
+    return own ? { source: "profil", filename: own.filename, storageKey: own.storageKey } : null;
+  };
+  return { dc1: pick("dc1"), dc2: pick("dc2") };
+}
+
+export type RenderedForm = {
+  buf: Buffer;
+  /** Champs restant à compléter à la main. */
+  todos: number;
+  /** Modèle officiel effectivement rempli (null : trame de l'application). */
+  template: FormTemplate | null;
+  /** Rubriques du modèle que le remplissage n'a pas retrouvées (modèle remanié). */
+  unplaced: string[];
+  /** Données absentes du profil ou de l'analyse. */
+  missing: string[];
+};
+
+/** Formulaire rempli : sur le modèle officiel s'il existe et qu'il est reconnu, sinon sur la trame de l'application. */
+export async function renderForm(kind: FormKind, ctx: FormContext, template: FormTemplate | null): Promise<RenderedForm> {
+  if (template) {
+    try {
+      const { ops, missing } = officialFormOps(kind, ctx);
+      const { buf, report } = await fillDocxForm(await storage().get(template.storageKey), ops);
+      if (report.placed.length || report.kept.length) return { buf, todos: report.unplaced.length + missing.length, template, unplaced: report.unplaced, missing };
+      logger.warn({ kind, filename: template.filename }, "modèle DC non reconnu : trame de l'application utilisée");
+    } catch (err) {
+      logger.warn({ err, kind, filename: template.filename }, "modèle DC illisible : trame de l'application utilisée");
+    }
+  }
+  const content = formContent(kind, ctx);
+  return { buf: await renderFormDocx(content, ctx.company.legalName), todos: countTodos(content), template: null, unplaced: [], missing: [] };
+}
+
 function refSlug(tender: { publicationRef: string | null; externalId: string }) {
   return safeName(tender.publicationRef ?? tender.externalId, 40);
 }
 
 export async function buildFormDocx(orgId: string, tenderId: string, kind: FormKind, fallbackCompanyName: string) {
-  const ctx = await loadFormContext(orgId, tenderId, fallbackCompanyName);
-  const tender = await prisma.tender.findFirstOrThrow({ where: { id: tenderId, organizationId: orgId }, select: { publicationRef: true, externalId: true } });
-  const content = formContent(kind, ctx);
-  const buf = await renderFormDocx(content, ctx.company.legalName);
-  return { buf, filename: `${kind.toUpperCase()}_${refSlug(tender)}.docx`, todos: countTodos(content) };
+  const [ctx, templates, tender] = await Promise.all([
+    loadFormContext(orgId, tenderId, fallbackCompanyName),
+    findFormTemplates(orgId, tenderId),
+    prisma.tender.findFirstOrThrow({ where: { id: tenderId, organizationId: orgId }, select: { publicationRef: true, externalId: true } }),
+  ]);
+  const rendered = await renderForm(kind, ctx, templates[kind]);
+  return { ...rendered, filename: `${kind.toUpperCase()}_${refSlug(tender)}.docx` };
 }
 
 /** Dossier complet (ZIP) prêt à vérifier puis déposer sur la plateforme de l'acheteur. */
@@ -334,16 +407,28 @@ export async function buildDossierZip(orgId: string, tenderId: string, fallbackC
   );
   const lots = tender.lots.sort((a, b) => compareLotNumbers(a.number, b.number));
   const pieces = visiblePieces(tender.pieces, lots.map((l) => l.id));
-  const plan = planDossier({ pieces, companyDocs, deadline: tender.deadlineAt, proposals: tender.proposals, pricings, lots });
+  const [ctx, templates] = await Promise.all([loadFormContext(orgId, tenderId, fallbackCompanyName), findFormTemplates(orgId, tenderId)]);
+  const plan = planDossier({
+    pieces, companyDocs, deadline: tender.deadlineAt, proposals: tender.proposals, pricings, lots,
+    formTemplates: { dc1: templates.dc1?.source, dc2: templates.dc2?.source },
+  });
 
-  const ctx = await loadFormContext(orgId, tenderId, fallbackCompanyName);
   const zip = new JSZip();
   for (const e of plan.entries) {
     let data: Buffer;
     if (e.source.kind === "storage") data = await storage().get(e.source.storageKey);
     else if (e.source.kind === "pricing") data = (await exportFilledTemplate(orgId, e.source.pricingId)).buf;
     else if (e.source.kind === "memoire") data = (await exportProposalDocx(orgId, e.source.proposalId, fallbackCompanyName))!.buf;
-    else data = await renderFormDocx(formContent(e.source.what, ctx), ctx.company.legalName);
+    else {
+      const rendered = await renderForm(e.source.what, ctx, templates[e.source.what]);
+      data = rendered.buf;
+      // Détail des champs à reprendre à la main, dans le sommaire.
+      const item = plan.summary.find((s) => s.files.includes(e.path));
+      if (item) {
+        if (rendered.missing.length) item.issues.push(`données absentes du profil : ${rendered.missing.join(", ")}`);
+        if (rendered.unplaced.length) item.issues.push(`rubriques non retrouvées dans le modèle : ${rendered.unplaced.join(", ")}`);
+      }
+    }
     zip.file(e.path, data);
   }
   zip.file(

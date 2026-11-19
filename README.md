@@ -16,6 +16,9 @@ d'offres informatiques (première organisation : Lunioncom).
 - Mémoire technique adapté aux critères de notation, édition par section,
   régénération ciblée, versions, validation humaine, matrice de conformité,
   **export DOCX**.
+- Dossier de candidature : pièces administratives du profil, **DC1 / DC2 remplis sur le
+  modèle officiel** (fichier Word joint au DCE ou modèle DAJ déposé dans le profil),
+  bordereaux de prix remplis, export ZIP prêt à déposer.
 - Tableau de bord, pipeline de candidature, commentaires, journal d'audit.
 
 Voir [ARCHITECTURE.md](ARCHITECTURE.md) et [TASKS.md](TASKS.md).

@@ -1,4 +1,5 @@
 import { AlignmentType, BorderStyle, Document, Footer, Packer, PageNumber, Paragraph, TextRun } from "docx";
+import type { FormOp } from "./docx-form-template";
 
 /**
  * Formulaires de candidature DC1 (lettre de candidature) et DC2 (déclaration du
@@ -251,4 +252,105 @@ export async function renderFormDocx(content: FormContent, companyName: string):
     ],
   });
   return Packer.toBuffer(doc);
+}
+
+// ── Remplissage du modèle officiel (DOCX de la DAJ ou version jointe au DCE) ──
+
+/** Mention des pieds de page des formulaires DAJ, remplacée par la référence réelle. */
+export const REF_PLACEHOLDER = "(référence de la consultation)";
+
+export type OfficialFormPlan = { ops: FormOp[]; missing: string[] };
+
+function pushValue(plan: OfficialFormPlan, field: string, label: string, value: string, occurrence?: number) {
+  if (value.trim()) plan.ops.push({ op: "fillBelow", field, label, value, occurrence });
+  else plan.missing.push(field);
+}
+
+function siretDigits(siret: string): string {
+  const d = siret.replace(/\D/g, "");
+  return d.length === 14 ? d : d.length === 9 ? `${d} (SIREN)` : "";
+}
+
+function selectedLotsText(ctx: FormContext): string {
+  return ctx.lots.filter((l) => l.selected).map((l) => `Lot n° ${l.number}${l.title ? ` — ${l.title}` : ""}`).join("\n");
+}
+
+/** Rubriques A et B, et référence dans les pieds de page : communes au DC1 et au DC2. */
+function commonOps(plan: OfficialFormPlan, ctx: FormContext, objectExtra = "") {
+  const ref = ctx.consultationReference.trim();
+  if (ref) plan.ops.push({ op: "replace", field: "Référence de la consultation (pied de page)", from: REF_PLACEHOLDER, to: ref });
+  pushValue(plan, "A — Acheteur", "Identification de l’acheteur", ctx.buyer);
+  const object = [ctx.consultationObject.trim(), ref ? `Référence de la consultation : ${ref}` : "", objectExtra].filter(Boolean).join("\n");
+  pushValue(plan, "B — Objet de la consultation", "Objet de la consultation", object);
+}
+
+/** Identification du candidat (DC1 rubrique D, DC2 rubrique C1) : première occurrence des libellés, la seconde concerne le mandataire. */
+function identityOps(plan: OfficialFormPlan, c: FormContext["company"]) {
+  const city = [c.postalCode, c.city].filter((s) => s.trim()).join(" ");
+  pushValue(plan, "Dénomination sociale", "Nom commercial et dénomination sociale de l’unité", c.legalName);
+  pushValue(plan, "Adresse", "Adresses postale et du siège social", c.address.trim() && city ? `${c.address.trim()}, ${city}` : "");
+  pushValue(plan, "Adresse électronique", "Adresse électronique", c.email);
+  pushValue(plan, "Téléphone", "Numéros de téléphone", c.phone);
+  pushValue(plan, "SIRET", "Numéro SIRET", siretDigits(c.siret));
+}
+
+export function officialDc1Ops(ctx: FormContext): OfficialFormPlan {
+  const plan: OfficialFormPlan = { ops: [], missing: [] };
+  commonOps(plan, ctx);
+  const selected = ctx.lots.filter((l) => l.selected);
+  if (!ctx.lots.length) plan.ops.push({ op: "check", field: "C — Marché non alloti", label: "pour le marché public (en cas de non allotissement)" });
+  else if (selected.length === ctx.lots.length) plan.ops.push({ op: "check", field: "C — Tous les lots", label: "pour tous les lots" });
+  else if (selected.length) {
+    plan.ops.push({ op: "check", field: "C — Lots retenus", label: "en cas d’allotissement ; si les lots" });
+    plan.ops.push({ op: "fillBelow", field: "C — Numéros des lots", label: "en cas d’allotissement ; si les lots", value: selectedLotsText(ctx) });
+  } else plan.missing.push("C — Lots retenus (aucun lot sélectionné)");
+  plan.ops.push({ op: "check", field: "D — Candidat seul", label: "Le candidat se présente seul" });
+  identityOps(plan, ctx.company);
+  plan.ops.push({ op: "check", field: "F1 — Attestation sur l’honneur", label: "cocher la case suivante" });
+  plan.ops.push({ op: "check", field: "F3 — Capacités présentées dans le DC2", label: "le formulaire DC2" });
+  return plan;
+}
+
+export function officialDc2Ops(ctx: FormContext): OfficialFormPlan {
+  const c = ctx.company;
+  const plan: OfficialFormPlan = { ops: [], missing: [] };
+  const lotsText = selectedLotsText(ctx);
+  commonOps(plan, ctx, lotsText ? `Candidature présentée pour : ${lotsText.replace(/\n/g, " ; ")}` : "");
+  identityOps(plan, c);
+  pushValue(plan, "Forme juridique", "Forme juridique du candidat", c.legalForm);
+  // PME au sens de la recommandation 2003/361/CE : moins de 250 personnes et CA ≤ 50 M€.
+  if (c.headcount !== null && (c.headcount >= 250 || (c.annualRevenueEur !== null && c.annualRevenueEur > 50_000_000))) {
+    plan.ops.push({ op: "check", field: "PME : non", label: "Non", after: "moyenne entreprise" });
+  } else if (c.headcount !== null) {
+    plan.ops.push({ op: "check", field: "PME : oui", label: "Oui", after: "moyenne entreprise" });
+  } else plan.missing.push("PME (oui / non) — effectif inconnu");
+  const siren = c.siret.replace(/\D/g, "").slice(0, 9);
+  pushValue(
+    plan,
+    "E1 — Inscription au registre professionnel",
+    "inscription sur un registre professionnel",
+    [siren.length === 9 ? `Inscription au registre du commerce et des sociétés (RCS) — SIREN ${siren}` : "", c.nafCode.trim() ? `Code NAF / APE : ${c.nafCode.trim()}` : "", c.vatNumber.trim() ? `N° TVA intracommunautaire : ${c.vatNumber.trim()}` : ""].filter(Boolean).join("\n"),
+  );
+  if (c.annualRevenueEur !== null) plan.ops.push({ op: "fillRow", field: "F1 — Chiffre d’affaires du dernier exercice", label: "Chiffre d’affaires global", values: [eur(c.annualRevenueEur)] });
+  else plan.missing.push("F1 — Chiffre d’affaires du dernier exercice");
+  const refs = ctx.references.map((r) => `• ${r.title} — ${r.client}${r.year ? ` (${r.year})` : ""}${r.amountEur !== null ? ` — ${eur(r.amountEur)}` : ""}`);
+  pushValue(
+    plan,
+    "G1 — Capacités techniques et professionnelles",
+    "qu’il peut récapituler ici",
+    [
+      c.headcount !== null ? `Effectif moyen annuel : ${c.headcount} personne(s)` : "",
+      c.certifications.length ? `Certifications et qualifications : ${c.certifications.join(", ")}` : "",
+      refs.length ? "Principales références des trois dernières années :" : "",
+      ...refs,
+    ].filter(Boolean).join("\n"),
+  );
+  if (c.headcount === null) plan.missing.push("G1 — Effectif moyen annuel");
+  if (!ctx.references.length) plan.missing.push("G1 — Références");
+  return plan;
+}
+
+/** Opérations de remplissage du modèle officiel, et champs sans valeur dans le profil. */
+export function officialFormOps(kind: FormKind, ctx: FormContext): OfficialFormPlan {
+  return kind === "dc1" ? officialDc1Ops(ctx) : officialDc2Ops(ctx);
 }
