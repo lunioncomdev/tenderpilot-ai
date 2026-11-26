@@ -15,7 +15,7 @@ export const SearchFiltersSchema = z.object({
   origin: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["BOAMP", "TED", "APPROCH", "MANUAL"]).optional()),
   status: z.preprocess((v) => (v === "" ? undefined : v), z.enum([
     "DETECTED", "TO_ANALYZE", "QUALIFIED", "GO", "NO_GO", "IN_PREPARATION", "IN_VALIDATION",
-    "READY_TO_SUBMIT", "SUBMITTED", "AWAITING_DECISION", "WON", "LOST",
+    "READY_TO_SUBMIT", "SUBMITTED", "AWAITING_DECISION", "WON",
   ]).optional()),
   contractType: optStr,
   procedureType: optStr,
@@ -26,7 +26,6 @@ export const SearchFiltersSchema = z.object({
   deadlineFrom: optDate,
   deadlineTo: optDate,
   maxDurationMonths: optNum,
-  includeExpired: optBool.default(false),
   includeDuplicates: optBool.default(false),
   includeClosed: optBool.default(false),
   /** Seulement les offres notées avec les critères de notation pondérés publiés par l'acheteur. */
@@ -44,6 +43,13 @@ export const DEFAULT_DIR: Record<TenderSort, "asc" | "desc"> = {
   relevance: "desc", published: "desc", score: "desc", value: "desc", deadline: "asc", title: "asc", status: "asc",
 };
 const PAGE_SIZE = 25;
+/** Délai minimal avant l'échéance : en dessous, plus le temps de répondre, l'offre n'est plus proposée. */
+export const MIN_DEADLINE_DAYS = 15;
+
+/** Échéance la plus proche encore proposée dans l'exploration et le tableau de bord. */
+export function minDeadline(now = new Date()) {
+  return new Date(now.getTime() + MIN_DEADLINE_DAYS * 86_400_000);
+}
 
 export function parseSearchParams(sp: Record<string, string | string[] | undefined>) {
   const flat = Object.fromEntries(Object.entries(sp).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v]));
@@ -86,7 +92,10 @@ export async function searchTenders(orgId: string, input: SearchFilters, now = n
     and.push({ id: { in: rankedIds } });
   }
   if (!f.includeDuplicates) and.push({ duplicateOfId: null });
-  if (!f.includeExpired) and.push({ OR: [{ deadlineAt: null }, { deadlineAt: { gte: now } }] });
+  // L'exploration ne montre ni les échéances passées ou trop proches (moins de 15 jours),
+  // ni les offres perdues (suivies dans « Mes candidatures »).
+  and.push({ OR: [{ deadlineAt: null }, { deadlineAt: { gte: minDeadline(now) } }] });
+  and.push({ status: { not: "LOST" } });
   if (!f.includeClosed) and.push({ noticeState: { in: ["ACTIVE", "MODIFIED"] } });
   if (f.awardCriteria) and.push({ id: { in: await buyerScoredIds(orgId) } });
   if (f.country) and.push({ buyerCountry: f.country.toUpperCase() });

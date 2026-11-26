@@ -110,8 +110,8 @@ interface TenderConnector {
    règlement de consultation en accès direct, DCE complet via le formulaire de
    retrait Prado (mode identifié ou anonyme, CGU acceptées par un administrateur
    dans Paramètres). Session HTTPS limitée à l'hôte de la plateforme, hôtes
-   privés refusés (SSRF), taille bornée (`DCE_MAX_MB`). Option de retrait
-   automatique à l'import des nouveaux avis, avant l'analyse. Comptes des autres
+   privés refusés (SSRF), taille bornée (`DCE_MAX_MB`). Retrait toujours
+   lancé à la demande depuis la fiche de l'offre (aucun traitement après synchronisation). Comptes des autres
    plateformes : mot de passe chiffré AES-256-GCM (`CREDENTIALS_KEY`).
 1. **Upload** (Route Handler) : taille max configurable, vérification du type par
    *magic bytes* (`file-type`), liste blanche PDF/DOCX/XLSX/TXT/ZIP, SHA-256,

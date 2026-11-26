@@ -7,7 +7,7 @@ d'offres informatiques (première organisation : Lunioncom).
   inter-sources, prise en compte des rectificatifs, annulations et attributions.
 - Recherche plein texte (PostgreSQL, français) et filtres, recherches sauvegardées.
 - Import manuel des DCE (PDF, DOCX, XLSX, TXT, ZIP) avec extraction, découpage et
-  traçabilité des pages ; pour le BOAMP, import automatique de l'extrait PDF de
+  traçabilité des pages ; pour le BOAMP, import en un clic de l'extrait PDF de
   l'avis et lien direct vers le dossier de consultation de la plateforme acheteur.
 - Analyse IA du DCE avec **Claude** : chaque information est reliée à un passage
   et la citation est vérifiée côté serveur ; « Non précisé » si absente.
@@ -90,7 +90,7 @@ tests** (`tests/helpers/fake-llm.ts`) ; il n'est jamais utilisé par l'applicati
 ## Limites connues (MVP)
 
 - Dépôt des offres sur les plateformes acheteurs : **manuel**.
-- DCE : retrait automatique sur les plateformes Atexo (PLACE, Maximilien,
+- DCE : retrait à la demande (depuis la fiche de l'offre) sur les plateformes Atexo (PLACE, Maximilien,
   Solaere, Mégalis…) — règlement de consultation en accès direct, DCE complet via
   le formulaire de retrait (mode identifié ou anonyme, CGU acceptées dans
   Paramètres → Récupération des DCE). Autres plateformes (AWS-Achat,

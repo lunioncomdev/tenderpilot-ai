@@ -12,7 +12,7 @@ import { requireContext } from "@/server/auth/context";
 import { hasRole } from "@/server/auth/rbac";
 import { prisma } from "@/server/db";
 import { isMaintenanceTender, tenderTechnologies } from "@/server/tenders/maintenance";
-import { DEFAULT_DIR, parseSearchParams, searchTenders } from "@/server/tenders/search";
+import { DEFAULT_DIR, MIN_DEADLINE_DAYS, parseSearchParams, searchTenders } from "@/server/tenders/search";
 import { applyAction } from "./[id]/actions";
 import { createManualTenderAction, deleteSearchAction, saveSearchAction } from "./actions";
 
@@ -39,13 +39,13 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
   const sortKey = filters.sort ?? (filters.q ? "relevance" : "published");
   const sort = { key: sortKey, dir: filters.dir ?? DEFAULT_DIR[sortKey] };
   const d = (x?: Date) => (x ? x.toISOString().slice(0, 10) : "");
-  const advancedOpen = ["minBudget", "maxBudget", "publishedFrom", "deadlineFrom", "deadlineTo", "minScore", "cpv", "contractType", "procedureType", "maxDurationMonths", "includeExpired", "includeClosed", "includeDuplicates", "awardCriteria"].some((k) => !!sp[k]);
+  const advancedOpen = ["minBudget", "maxBudget", "publishedFrom", "deadlineFrom", "deadlineTo", "minScore", "cpv", "contractType", "procedureType", "maxDurationMonths", "includeClosed", "includeDuplicates", "awardCriteria"].some((k) => !!sp[k]);
 
   return (
     <>
       <PageHeader
         title="Explorer les appels d'offres"
-        description={`${res.total.toLocaleString("fr-FR")} consultation(s) correspondante(s). Pré-score calculé sur les métadonnées de l'avis ; le score complet nécessite l'analyse du DCE.`}
+        description={`${res.total.toLocaleString("fr-FR")} consultation(s) correspondante(s), échéance à ${MIN_DEADLINE_DAYS} jours au moins. Pré-score calculé sur les métadonnées de l'avis ; le score complet nécessite l'analyse du DCE.`}
         actions={
           <details className="relative">
             <summary className={buttonVariants({ variant: "outline" }) + " cursor-pointer list-none"}>
@@ -84,7 +84,7 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
             <Field label="Statut">
               <Select name="status" defaultValue={filters.status ?? ""}>
                 <option value="">Tous</option>
-                {Object.entries(fr.tenderStatus).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                {Object.entries(fr.tenderStatus).filter(([k]) => k !== "LOST").map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </Select>
             </Field>
             <details className="sm:col-span-2 lg:col-span-6" open={advancedOpen}>
@@ -113,7 +113,6 @@ export default async function TendersPage({ searchParams }: { searchParams: SP }
               {filters.dir && <input type="hidden" name="dir" value={filters.dir} />}
                 </Field>
                 <div className="flex flex-col justify-end gap-1 text-sm sm:col-span-2">
-              <label className="flex items-center gap-2"><input type="checkbox" name="includeExpired" value="1" defaultChecked={filters.includeExpired} /> Inclure les échéances passées</label>
               <label className="flex items-center gap-2"><input type="checkbox" name="includeClosed" value="1" defaultChecked={filters.includeClosed} /> Inclure annulés / attribués</label>
               <label className="flex items-center gap-2"><input type="checkbox" name="includeDuplicates" value="1" defaultChecked={filters.includeDuplicates} /> Afficher les doublons inter-sources</label>
               <label className="flex items-center gap-2"><input type="checkbox" name="awardCriteria" value="1" defaultChecked={filters.awardCriteria} /> Avec critères de notation de l&apos;acheteur</label>
