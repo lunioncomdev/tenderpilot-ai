@@ -48,7 +48,7 @@ export default async function SourcesPage({ searchParams }: { searchParams: Prom
     <>
       <PageHeader
         title="Sources et automatisations"
-        description={`Synchronisation automatique selon la planification « ${env().SYNC_CRON} » (fuseau Europe/Paris). Seules des API officielles et ouvertes sont utilisées.`}
+        description={`Synchronisation automatique selon la planification « ${env().SYNC_CRON} » (fuseau Europe/Paris). Elle détecte les avis ; le traitement des dossiers (DCE, analyse) se lance depuis la fiche de l'offre. Seules des API officielles et ouvertes sont utilisées.`}
       />
       <Alert tone={paused ? "warning" : "success"} className="mb-6">
         <div className="flex flex-wrap items-center justify-between gap-3">

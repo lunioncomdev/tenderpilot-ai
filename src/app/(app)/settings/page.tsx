@@ -86,7 +86,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         <Card>
           <CardHeader>
             <CardTitle>Intelligence artificielle</CardTitle>
-            <CardDescription>Fournisseur : {isOpenAi ? "OpenAI" : "Anthropic"}. Les nouveaux avis BOAMP sont analysés automatiquement après import de leur extrait ; les autres appels sont déclenchés manuellement.</CardDescription>
+            <CardDescription>Fournisseur : {isOpenAi ? "OpenAI" : "Anthropic"}. Aucune analyse n&apos;est lancée automatiquement : chaque appel est déclenché depuis la fiche de l&apos;offre ou le mémoire.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm">
             <Alert tone={ai.enabled ? "success" : "warning"}>{ai.enabled ? `Active — modèle ${ai.model}, effort ${env().AI_EFFORT}${ai.keySource === "organization" ? ", clé de l'organisation" : ai.keySource === "env" ? ", clé du serveur" : ""}.` : `Inactive : ${ai.reason}.`}</Alert>
@@ -184,7 +184,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <CardContent>
             <ActionForm action={saveDceSettingsAction} className="flex flex-col gap-4">
               <Alert tone={dceProblem ? "warning" : "success"}>
-                {dceProblem ? `Retrait automatique inactif : ${dceProblem}.` : `Actif — mode ${dce?.mode === "IDENTIFIED" ? "identifié" : "anonyme"}${dce?.autoRetrieve ? ", retrait automatique des offres ouvertes" : ", à la demande depuis la fiche de l'offre"}.`}
+                {dceProblem ? `Retrait inactif : ${dceProblem}.` : `Actif — mode ${dce?.mode === "IDENTIFIED" ? "identifié" : "anonyme"}, à la demande depuis la fiche de l'offre.`}
               </Alert>
               <div className="grid gap-3 md:grid-cols-3">
                 <Field label="Mode de retrait" className="md:col-span-3" hint="Identifié : l'acheteur vous informera des modifications du DCE et des réponses aux questions des candidats.">
@@ -213,10 +213,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                   {dce?.termsAcceptedAt && <span className="text-muted-foreground"> Acceptées le {formatDateTime(dce.termsAcceptedAt)}.</span>}
                 </span>
               </label>
-              <label className="flex items-start gap-2 text-sm">
-                <input type="checkbox" name="autoRetrieve" defaultChecked={dce?.autoRetrieve ?? false} disabled={!isAdmin} className="mt-0.5" />
-                <span>Retirer automatiquement le DCE des offres ouvertes : nouveaux avis à chaque synchronisation et rattrapage des offres existantes, puis analyse IA du dossier complet. Sinon, le retrait se lance depuis la fiche de l&apos;offre.</span>
-              </label>
+              <p className="text-xs text-muted-foreground">Aucun dossier n&apos;est traité automatiquement : le retrait du DCE et l&apos;analyse se lancent depuis la fiche de l&apos;offre.</p>
               {isAdmin ? <SubmitButton className="self-start">Enregistrer</SubmitButton> : <p className="text-xs text-muted-foreground">Seuls les administrateurs peuvent modifier ces paramètres.</p>}
             </ActionForm>
           </CardContent>

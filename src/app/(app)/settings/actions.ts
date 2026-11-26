@@ -12,7 +12,7 @@ import { PLAN_LIMITS } from "@/server/ai/gateway";
 import { checkOpenAiAccess } from "@/server/ai/openai";
 import { env } from "@/server/env";
 import { AiRulesSchema } from "@/server/ai/rules";
-import { enqueuePendingDce, settingsProblem } from "@/server/dce/retrieve-service";
+import { settingsProblem } from "@/server/dce/retrieve-service";
 import { decryptSecret, encryptSecret } from "@/server/dce/secrets";
 import { CRITERIA } from "@/server/scoring/engine";
 
@@ -79,10 +79,9 @@ const DceSettingsSchema = z.object({
   postalCode: z.string().trim().max(10).regex(/^[\dA-Za-z -]*$/, "Code postal invalide").default(""),
   city: txt(100),
   acceptTerms: z.preprocess((v) => v === "on", z.boolean()),
-  autoRetrieve: z.preprocess((v) => v === "on", z.boolean()),
 });
 
-/** Paramètres de retrait automatique des DCE (mode, coordonnées transmises aux acheteurs, CGU). */
+/** Paramètres de retrait des DCE (mode, coordonnées transmises aux acheteurs, CGU). */
 export async function saveDceSettingsAction(_p: ActionState, fd: FormData): Promise<ActionState> {
   return runAction(async () => {
     const ctx = await requireContext("ADMIN");
@@ -93,17 +92,17 @@ export async function saveDceSettingsAction(_p: ActionState, fd: FormData): Prom
       : { termsAcceptedAt: null, termsAcceptedById: null };
     const saved = await prisma.dceRetrievalSettings.upsert({
       where: { organizationId: ctx.orgId },
-      create: { organizationId: ctx.orgId, ...d, ...terms },
-      update: { ...d, ...terms },
+      // Le retrait ne se lance plus qu'à la demande : l'ancienne option automatique est remise à zéro.
+      create: { organizationId: ctx.orgId, ...d, ...terms, autoRetrieve: false },
+      update: { ...d, ...terms, autoRetrieve: false },
     });
     await audit({
       orgId: ctx.orgId, userId: ctx.userId, action: "dce.settings_updated", entityType: "DceRetrievalSettings", entityId: saved.id,
-      metadata: { mode: d.mode, autoRetrieve: d.autoRetrieve, termsAccepted: acceptTerms },
+      metadata: { mode: d.mode, termsAccepted: acceptTerms },
     });
     revalidatePath("/settings");
     const problem = settingsProblem(saved);
-    const pending = d.autoRetrieve && !problem ? await enqueuePendingDce(ctx.orgId) : false;
-    return problem && d.mode !== "DISABLED" ? { ok: true, message: `Enregistré, mais retrait encore impossible : ${problem}.` } : { ok: true, message: pending ? "Paramètres enregistrés. Retrait des DCE des offres ouvertes lancé." : "Paramètres de récupération des DCE enregistrés." };
+    return problem && d.mode !== "DISABLED" ? { ok: true, message: `Enregistré, mais retrait encore impossible : ${problem}.` } : { ok: true, message: "Paramètres de récupération des DCE enregistrés." };
   });
 }
 

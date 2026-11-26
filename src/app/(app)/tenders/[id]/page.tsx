@@ -277,7 +277,7 @@ export default async function TenderPage({ params }: { params: Promise<{ id: str
             <CardHeader>
               <CardTitle>Dossier de consultation (DCE)</CardTitle>
               <CardDescription>
-                Le dossier de consultation est publié sur la plateforme de l&apos;acheteur. Sur les plateformes Atexo (PLACE, Maximilien…), il est retiré automatiquement ;
+                Le dossier de consultation est publié sur la plateforme de l&apos;acheteur. Sur les plateformes Atexo (PLACE, Maximilien…), il se récupère d&apos;un clic ci-dessous ;
                 ailleurs, téléchargez-le (bouton « Dossier de consultation ») puis importez-le ici. Aucun contournement d&apos;accès n&apos;est effectué.
               </CardDescription>
             </CardHeader>

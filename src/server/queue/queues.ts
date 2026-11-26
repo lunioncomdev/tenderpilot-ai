@@ -6,12 +6,9 @@ export type JobMap = {
   "sync-source": { orgId: string; source: SourceKey; trigger: "manual" | "cron" };
   "sync-all": Record<string, never>;
   "process-document": { orgId: string; documentId: string };
-  /** `analyze` : enchaîne l'analyse IA une fois l'extrait importé (avis reçus par synchronisation). */
-  "import-notice-pdf": { orgId: string; tenderId: string; userId: string | null; analyze?: boolean };
+  "import-notice-pdf": { orgId: string; tenderId: string; userId: string | null };
   /** Retrait du DCE sur le profil acheteur (bouton de la fiche). */
   "retrieve-dce": { orgId: string; tenderId: string; userId: string | null };
-  /** Rattrapage des DCE non encore retirés (après synchronisation ou activation de l'option). */
-  "retrieve-dce-pending": { orgId: string };
   "analyze-tender": { orgId: string; analysisId: string };
   "generate-section": { orgId: string; sectionId: string; instruction?: string };
   "generate-compliance": { orgId: string; proposalId: string; overwrite: boolean };
@@ -25,7 +22,6 @@ export const QUEUE_FOR: Record<JobName, QueueName> = {
   "process-document": "documents",
   "import-notice-pdf": "documents",
   "retrieve-dce": "documents",
-  "retrieve-dce-pending": "documents",
   "analyze-tender": "ai",
   "generate-section": "ai",
   "generate-compliance": "ai",

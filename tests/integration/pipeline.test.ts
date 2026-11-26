@@ -297,7 +297,7 @@ describe("DCE, analyse IA, scoring, mémoire", () => {
 
     // Critères pondérés dans le DCE : score selon l'acheteur, et filtre « Avec critères de notation »
     expect(score.breakdown).toEqual(expect.arrayContaining([expect.objectContaining({ key: "buyer-0", label: "Valeur technique" })]));
-    const withCriteria = await searchTenders(orgId, { awardCriteria: true, includeExpired: true, includeClosed: true, includeDuplicates: true }, now);
+    const withCriteria = await searchTenders(orgId, { awardCriteria: true, includeClosed: true, includeDuplicates: true }, now);
     expect(withCriteria.items.map((t) => t.id)).toEqual([tenderId]);
     expect(Number(usage[0].costUsd)).toBeGreaterThanOrEqual(0);
   });

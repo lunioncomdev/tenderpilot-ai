@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createOrganizationWithOwner } from "@/server/auth/accounts";
 import { prisma } from "@/server/db";
-import { DceRetrievalUnavailableError, pendingDceTenders, retrieveDce } from "@/server/dce/retrieve-service";
+import { DceRetrievalUnavailableError, retrieveDce } from "@/server/dce/retrieve-service";
 import { makePdf, makeZip } from "../helpers/fixtures-builders";
 
 const html = (f: string) => readFileSync(path.join(__dirname, "..", "fixtures", "atexo", f), "utf8");
@@ -43,7 +43,7 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe("retrait automatique des DCE", () => {
+describe("retrait des DCE", () => {
   it("refuse sans configuration et l'indique sur l'offre", async () => {
     await expect(retrieveDce(orgId, tenderId, null, fakePlace)).rejects.toBeInstanceOf(DceRetrievalUnavailableError);
     expect((await prisma.tender.findUniqueOrThrow({ where: { id: tenderId } })).dceFetchError).toMatch(/désactivé/);
@@ -53,12 +53,11 @@ describe("retrait automatique des DCE", () => {
   it("retire RC, Q/R et DCE complet, puis les extrait", async () => {
     await prisma.dceRetrievalSettings.create({
       data: {
-        organizationId: orgId, mode: "IDENTIFIED", autoRetrieve: true, termsAcceptedAt: new Date(),
+        organizationId: orgId, mode: "IDENTIFIED", termsAcceptedAt: new Date(),
         firstName: "Camille", lastName: "Martin", email: "ao@example.fr", phone: "0140506070", legalName: "Agence Exemple",
         siret: "12345678900012", address: "1 rue de la Paix", postalCode: "75002", city: "Paris",
       },
     });
-    expect(await pendingDceTenders(orgId)).toEqual([tenderId]);
 
     const outcome = await retrieveDce(orgId, tenderId, null, fakePlace);
     expect(outcome.warnings).toEqual([]);
@@ -74,8 +73,7 @@ describe("retrait automatique des DCE", () => {
     const t = await prisma.tender.findUniqueOrThrow({ where: { id: tenderId } });
     expect(t.dceFetchedAt).not.toBeNull();
     expect(t.dceFetchError).toBeNull();
-    // Retiré : n'est plus en attente ; un second retrait ne réimporte rien.
-    expect(await pendingDceTenders(orgId)).toEqual([]);
+    // Un second retrait ne réimporte rien.
     expect((await retrieveDce(orgId, tenderId, null, fakePlace)).duplicates).toHaveLength(3);
   });
 });

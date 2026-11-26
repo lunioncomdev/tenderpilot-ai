@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
+import { minDeadline } from "./tenders/search";
 
 /** Divisions CPV (2 premiers chiffres) les plus fréquentes en informatique. */
 const CPV_DIVISIONS: Record<string, string> = {
@@ -23,12 +24,14 @@ export async function getDashboard(orgId: string, now = new Date()) {
     noticeState: { in: ["ACTIVE", "MODIFIED"] },
     OR: [{ deadlineAt: null }, { deadlineAt: { gte: now } }],
   };
+  // Opportunités encore proposées : échéance à 15 jours au moins (comme dans l'exploration).
+  const explorable: Prisma.TenderWhereInput = { ...active, OR: [{ deadlineAt: null }, { deadlineAt: { gte: minDeadline(now) } }] };
 
   const [newCount, qualified, priority, preparing, upcoming, won, lost, submittedValue, byCountry, cpvRows, weekly, recentScores] =
     await Promise.all([
       prisma.tender.count({ where: { organizationId: orgId, duplicateOfId: null, createdAt: { gte: new Date(now.getTime() - 7 * day) } } }),
       prisma.tender.count({ where: { ...active, status: { in: ["QUALIFIED", "GO"] } } }),
-      prisma.tender.count({ where: { ...active, preScore: { gte: 80 } } }),
+      prisma.tender.count({ where: { ...explorable, preScore: { gte: 80 } } }),
       prisma.tender.count({ where: { organizationId: orgId, status: { in: ["IN_PREPARATION", "IN_VALIDATION", "READY_TO_SUBMIT"] } } }),
       prisma.tender.findMany({
         where: { organizationId: orgId, duplicateOfId: null, deadlineAt: { gte: now, lte: new Date(now.getTime() + 14 * day) }, status: { notIn: ["NO_GO", "LOST", "WON", "DETECTED"] } },
@@ -52,7 +55,7 @@ export async function getDashboard(orgId: string, now = new Date()) {
         WHERE "organizationId" = ${orgId} AND "duplicateOfId" IS NULL AND "publishedAt" >= ${new Date(now.getTime() - 8 * 7 * day)}
         GROUP BY 1 ORDER BY 1`),
       prisma.tender.findMany({
-        where: { ...active, preScore: { not: null } },
+        where: { ...explorable, preScore: { not: null } },
         orderBy: { preScore: "desc" },
         take: 6,
         select: { id: true, title: true, preScore: true, buyerName: true, deadlineAt: true },
